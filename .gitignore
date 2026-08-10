@@ -1,0 +1,55 @@
+# ====== Build & Output ======
+build/
+target/
+out/
+bin/
+.gradle/
+*.class
+*.jar
+*.war
+
+# ====== IDE ======
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+.springBeans
+.sts4-cache
+
+# ====== Claude ======
+.claude/
+
+# ====== Docs ======
+docs/
+
+# ====== OS ======
+Thumbs.db
+.DS_Store
+*.swp
+*.swo
+*~
+
+# ====== Config & Secrets ======
+*.local.yml
+*.local.properties
+.env
+.env.local
+
+# ====== Logs ======
+logs/
+*.log
+
+# ====== Gradle wrapper (keep jar, ignore everything else) ======
+!gradle/wrapper/gradle-wrapper.jar
+
+# ====== Docker ======
+docker-compose.override.yml
+
+# ====== Generated ======
+HELP.md
+
+# ====== Nested .git ======
+Product-Catalog-Service/.git/
