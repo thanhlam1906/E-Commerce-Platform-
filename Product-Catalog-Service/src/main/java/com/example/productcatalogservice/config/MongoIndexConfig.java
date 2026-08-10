@@ -16,23 +16,11 @@ public class MongoIndexConfig {
     @PostConstruct
     @SuppressWarnings("deprecation")
     void ensureIndexes() {
-        // SKU unique trên variants.sku (embedded array)
+        // SKU unique trên variants.sku (embedded array) — không khai báo được bằng annotation
         mongoTemplate.indexOps("products")
                 .ensureIndex(new Index()
                         .on("variants.sku", Sort.Direction.ASC)
                         .unique()
                         .sparse());
-
-        // Compound index: findByCategoryId + isActive
-        mongoTemplate.indexOps("products")
-                .ensureIndex(new Index()
-                        .on("isActive", Sort.Direction.ASC)
-                        .on("categoryId", Sort.Direction.ASC));
-
-        // Compound index: findAllByIsActive sorted by createdAt
-        mongoTemplate.indexOps("products")
-                .ensureIndex(new Index()
-                        .on("isActive", Sort.Direction.ASC)
-                        .on("createdAt", Sort.Direction.DESC));
     }
 }

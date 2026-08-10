@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -18,10 +19,12 @@ public class CreateProductRequest {
     @NotBlank(message = "Tên sản phẩm không được để trống")
     private String name;
 
+    @Size(max = 5000, message = "Mô tả sản phẩm không được vượt quá 5000 ký tự")
     private String description;
 
     private String categoryId;
 
+    @Size(max = 250, message = "Thương hiệu không được vượt quá 250 ký tự")
     private String brand;
 
     @NotEmpty(message = "Sản phẩm phải có ít nhất một biến thể")
@@ -45,6 +48,7 @@ public class CreateProductRequest {
 
         private List<String> images;
 
+        @NotNull(message = "Số lượng tồn kho không được để trống")
         @PositiveOrZero(message = "Số lượng tồn kho phải >= 0")
         private Integer stockQuantity;
     }

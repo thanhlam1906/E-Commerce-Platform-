@@ -42,8 +42,6 @@ public class ProductService {
 
         Product product = productMapper.toEntity(request);
         product.setSlug(toSlug(request.getName()));
-        product.setCreatedAt(Instant.now());
-        product.setUpdatedAt(Instant.now());
 
         // Upload ảnh cho từng variant theo index
         for (var entry : variantImages.entrySet()) {

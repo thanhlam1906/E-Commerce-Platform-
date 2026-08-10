@@ -46,9 +46,6 @@ public class CategoryService {
         validateParentCategory(request.getParentId());
 
         Category category = categoryMapper.toEntity(request);
-        category.setStatus(CategoryStatus.ACTIVE);
-        category.setCreatedAt(Instant.now());
-        category.setUpdatedAt(Instant.now());
         return categoryMapper.toResponse(categoryRepository.save(category));
     }
 
@@ -66,12 +63,10 @@ public class CategoryService {
             throw new DuplicateResourceException(ErrorMessages.CATEGORY_SLUG_EXISTS);
         }
 
-        if (request.getParentId() != null) {
-            if (request.getParentId().equals(id)) {
-                throw new IllegalArgumentException("Danh mục không thể là cha của chính nó");
-            }
-            validateParentCategory(request.getParentId());
+        if (id.equals(request.getParentId())) {
+            throw new IllegalArgumentException("Danh mục không thể là cha của chính nó");
         }
+        validateParentCategory(request.getParentId());
 
         category.setName(request.getName());
         category.setSlug(request.getSlug());

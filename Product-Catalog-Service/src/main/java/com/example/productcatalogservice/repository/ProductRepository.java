@@ -18,7 +18,6 @@ public interface ProductRepository extends MongoRepository<Product, String> {
 
     Page<Product> findByNameContainingIgnoreCaseAndIsActiveTrue(String keyword, Pageable pageable);
 
-    boolean existsByVariantsSku(String sku);
 
     @Query("{ 'variants.sku': { $in: ?0 } }")
     List<Product> findByVariantsSkuIn(List<String> skus);

@@ -8,7 +8,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -19,6 +21,22 @@ public class CloudinaryService {
 
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
     private static final String FOLDER = "products";
+    private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
+            "image/jpeg", "image/png", "image/webp"
+    );
+
+    // Magic bytes cho từng định dạng ảnh
+    // ponytail: chỉ check 4 byte đầu, đủ để phân biệt JPEG/PNG/WebP. Nếu cần GIF thì thêm.
+    private static boolean isAllowedImageType(byte[] header) {
+        if (header.length < 4) return false;
+        // JPEG: FF D8 FF
+        if (header[0] == (byte) 0xFF && header[1] == (byte) 0xD8 && header[2] == (byte) 0xFF) return true;
+        // PNG: 89 50 4E 47
+        if (header[0] == (byte) 0x89 && header[1] == (byte) 0x50 && header[2] == (byte) 0x4E && header[3] == (byte) 0x47) return true;
+        // WebP: 52 49 46 46 (RIFF)
+        if (header[0] == (byte) 0x52 && header[1] == (byte) 0x49 && header[2] == (byte) 0x46 && header[3] == (byte) 0x46) return true;
+        return false;
+    }
 
     public String upload(MultipartFile file) {
         validateFile(file);
@@ -42,9 +60,22 @@ public class CloudinaryService {
         if (file.getSize() > MAX_FILE_SIZE) {
             throw new IllegalArgumentException("File ảnh vượt quá 10MB");
         }
+
+        // Kiểm tra MIME type (whitelist) — chặn SVG (XSS) và các định dạng lạ
         String contentType = file.getContentType();
-        if (contentType == null || !contentType.startsWith("image/")) {
+        if (contentType == null || !ALLOWED_MIME_TYPES.contains(contentType)) {
             throw new IllegalArgumentException("Chỉ chấp nhận file ảnh (jpg, png, webp)");
+        }
+
+        // Kiểm tra magic bytes — chống MIME spoofing (đổi header Content-Type để qua mặt)
+        try (InputStream in = file.getInputStream()) {
+            byte[] header = new byte[4];
+            int bytesRead = in.read(header);
+            if (bytesRead < 4 || !isAllowedImageType(header)) {
+                throw new IllegalArgumentException("File không phải ảnh hợp lệ (sai định dạng thực tế)");
+            }
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Không thể đọc file ảnh");
         }
     }
 }

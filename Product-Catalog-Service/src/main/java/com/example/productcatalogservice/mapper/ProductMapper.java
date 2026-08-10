@@ -10,6 +10,7 @@ import org.mapstruct.Mapping;
 @Mapper(componentModel = "spring")
 public interface ProductMapper {
 
+    @Mapping(target = "isActive", source = "active")
     ProductResponse toResponse(Product product);
 
     @Mapping(target = "id", ignore = true)

@@ -36,8 +36,14 @@ public class ProductController {
         Map<Integer, List<MultipartFile>> variantImages = new HashMap<>();
         for (String partName : httpRequest.getMultiFileMap().keySet()) {
             if (partName.startsWith("images_")) {
-                int index = Integer.parseInt(partName.substring("images_".length()));
-                variantImages.put(index, httpRequest.getFiles(partName));
+                try {
+                    int index = Integer.parseInt(partName.substring("images_".length()));
+                    variantImages.put(index, httpRequest.getFiles(partName));
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            "Tên part ảnh không hợp lệ: '" + partName
+                            + "'. Định dạng đúng: images_0, images_1, ...");
+                }
             }
         }
 
@@ -52,13 +58,6 @@ public class ProductController {
             @RequestParam(required = false) String keyword,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(ApiDataResponse.ok(productService.findAllProducts(categoryId, keyword, pageable)));
-    }
-
-    @GetMapping("/search")
-    public ResponseEntity<ApiDataResponse<Page<ProductResponse>>> searchProducts(
-            @RequestParam("q") String keyword,
-            @PageableDefault(size = 20) Pageable pageable) {
-        return ResponseEntity.ok(ApiDataResponse.ok(productService.findAllProducts(null, keyword, pageable)));
     }
 
     @GetMapping("/{id}")
