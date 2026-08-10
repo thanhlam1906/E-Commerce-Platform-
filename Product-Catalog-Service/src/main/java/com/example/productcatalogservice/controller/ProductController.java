@@ -1,11 +1,9 @@
 package com.example.productcatalogservice.controller;
 
-import com.example.productcatalogservice.constant.ErrorMessages;
 import com.example.productcatalogservice.dto.request.CreateProductRequest;
 import com.example.productcatalogservice.dto.response.ApiDataResponse;
 import com.example.productcatalogservice.dto.response.ProductResponse;
 import com.example.productcatalogservice.service.ProductService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -29,30 +27,23 @@ import java.util.Map;
 public class ProductController {
 
     private final ProductService productService;
-    private final ObjectMapper objectMapper;
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiDataResponse<ProductResponse>> createProduct(
-            MultipartHttpServletRequest request) {
-        try {
-            String productJson = request.getParameter("product");
-            CreateProductRequest productRequest = objectMapper.readValue(productJson, CreateProductRequest.class);
+            @RequestPart("product") @Valid CreateProductRequest request,
+            MultipartHttpServletRequest httpRequest) {
 
-            // Gom ảnh theo variant index: images_0 → variant[0], images_1 → variant[1], ...
-            Map<Integer, List<MultipartFile>> variantImages = new HashMap<>();
-            for (String partName : request.getMultiFileMap().keySet()) {
-                if (partName.startsWith("images_")) {
-                    int index = Integer.parseInt(partName.substring("images_".length()));
-                    variantImages.put(index, request.getFiles(partName));
-                }
+        Map<Integer, List<MultipartFile>> variantImages = new HashMap<>();
+        for (String partName : httpRequest.getMultiFileMap().keySet()) {
+            if (partName.startsWith("images_")) {
+                int index = Integer.parseInt(partName.substring("images_".length()));
+                variantImages.put(index, httpRequest.getFiles(partName));
             }
-
-            ProductResponse response = productService.createProduct(productRequest, variantImages);
-            return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(ApiDataResponse.created(response));
-        } catch (Exception e) {
-            throw new IllegalArgumentException(ErrorMessages.VALIDATION_FAILED + ": " + e.getMessage());
         }
+
+        ProductResponse response = productService.createProduct(request, variantImages);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiDataResponse.created(response));
     }
 
     @GetMapping
