@@ -21,6 +21,5 @@ public interface ProductMapper {
 
     ProductResponse.Variant toVariantResponse(ProductVariant variant);
 
-    @Mapping(target = "images", ignore = true)
     ProductVariant toVariant(CreateProductRequest.Variant request);
 }

@@ -7,6 +7,7 @@ import com.example.productcatalogservice.exception.DuplicateResourceException;
 import com.example.productcatalogservice.exception.ResourceNotFoundException;
 import com.example.productcatalogservice.mapper.ProductMapper;
 import com.example.productcatalogservice.model.Product;
+import com.example.productcatalogservice.model.ProductVariant;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import com.example.productcatalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
@@ -91,9 +92,19 @@ public class ProductService {
         product.setDescription(request.getDescription());
         product.setCategoryId(request.getCategoryId());
         product.setBrand(request.getBrand());
-        product.setVariants(request.getVariants().stream()
-                .map(productMapper::toVariant)
-                .toList());
+        List<ProductVariant> newVariants = new ArrayList<>();
+        for (int i = 0; i < request.getVariants().size(); i++){
+            var reqVar = request.getVariants().get(i);
+            ProductVariant entity = productMapper.toVariant(reqVar);
+
+            // Nếu request không gửi ảnh mới → giữ ảnh cũ (nếu có variant cũ cùng index)
+            if ((reqVar.getImages() == null || reqVar.getImages().isEmpty())
+                    && i < product.getVariants().size()) {
+                entity.setImages(product.getVariants().get(i).getImages());
+            }
+            newVariants.add(entity);
+        }
+        product.setVariants(newVariants);
         product.setUpdatedAt(Instant.now());
 
         return productMapper.toResponse(productRepository.save(product));
