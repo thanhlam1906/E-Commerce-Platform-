@@ -14,6 +14,7 @@ public class MongoIndexConfig {
     private final MongoTemplate mongoTemplate;
 
     @PostConstruct
+    @SuppressWarnings("deprecation")
     void ensureIndexes() {
         // SKU unique trên variants.sku (embedded array)
         mongoTemplate.indexOps("products")

@@ -10,14 +10,12 @@ import com.example.productcatalogservice.model.Category;
 import com.example.productcatalogservice.model.enums.CategoryStatus;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CategoryService {

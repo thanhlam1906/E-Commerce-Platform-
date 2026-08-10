@@ -35,33 +35,6 @@ public class CloudinaryService {
         }
     }
 
-    public void delete(String publicId) {
-        try {
-            cloudinary.uploader().destroy(publicId, ObjectUtils.emptyMap());
-        } catch (IOException e) {
-            log.error("Xóa ảnh thất bại: {}", publicId, e);
-        }
-    }
-
-    public String extractPublicId(String imageUrl) {
-        // URL format: https://res.cloudinary.com/<cloud>/image/upload/v1234567/products/abc123.jpg
-        int uploadIndex = imageUrl.indexOf("/upload/");
-        if (uploadIndex == -1) {
-            return null;
-        }
-        String afterUpload = imageUrl.substring(uploadIndex + 8); // skip "/upload/"
-
-        // Remove version prefix like "v1234567/"
-        int versionEnd = afterUpload.indexOf('/');
-        if (versionEnd != -1 && afterUpload.substring(0, versionEnd).startsWith("v")) {
-            afterUpload = afterUpload.substring(versionEnd + 1);
-        }
-
-        // Remove file extension
-        int dotIndex = afterUpload.lastIndexOf('.');
-        return dotIndex != -1 ? afterUpload.substring(0, dotIndex) : afterUpload;
-    }
-
     private void validateFile(MultipartFile file) {
         if (file.isEmpty()) {
             throw new IllegalArgumentException("File ảnh trống");

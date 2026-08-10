@@ -19,7 +19,5 @@ public interface ProductMapper {
     @Mapping(target = "updatedAt", ignore = true)
     Product toEntity(CreateProductRequest request);
 
-    ProductResponse.Variant toVariantResponse(ProductVariant variant);
-
     ProductVariant toVariant(CreateProductRequest.Variant request);
 }

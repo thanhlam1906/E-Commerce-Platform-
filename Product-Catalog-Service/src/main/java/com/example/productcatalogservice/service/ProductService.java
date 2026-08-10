@@ -11,7 +11,6 @@ import com.example.productcatalogservice.model.ProductVariant;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import com.example.productcatalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -24,7 +23,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-@Slf4j
+import static java.util.regex.Pattern.quote;
+
 @Service
 @RequiredArgsConstructor
 public class ProductService {
@@ -38,7 +38,7 @@ public class ProductService {
 
     public ProductResponse createProduct(CreateProductRequest request, Map<Integer, List<MultipartFile>> variantImages) {
         validateCategory(request.getCategoryId());
-        validateSkuUnique(request);
+        validateSkuUnique(request,null);
 
         Product product = productMapper.toEntity(request);
         product.setSlug(toSlug(request.getName()));
@@ -60,7 +60,8 @@ public class ProductService {
 
     public Page<ProductResponse> findAllProducts(String categoryId, String keyword, Pageable pageable) {
         if (keyword != null && !keyword.isBlank()) {
-            return productRepository.findByNameContainingIgnoreCaseAndIsActiveTrue(keyword, pageable)
+            String sanitized = quote(keyword);
+            return productRepository.findByNameContainingIgnoreCaseAndIsActiveTrue(sanitized, pageable)
                     .map(productMapper::toResponse);
         }
         if (categoryId != null && !categoryId.isBlank()) {
@@ -85,7 +86,7 @@ public class ProductService {
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorMessages.PRODUCT_NOT_FOUND + " với id: " + id));
 
         validateCategory(request.getCategoryId());
-        validateSkuUniqueForUpdate(request, product);
+        validateSkuUnique(request, product);
 
         product.setName(request.getName());
         product.setSlug(toSlug(request.getName()));
@@ -114,6 +115,7 @@ public class ProductService {
 
     public void deleteProduct(String id) {
         Product product = productRepository.findById(id)
+                .filter(Product::isActive)
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorMessages.PRODUCT_NOT_FOUND + " với id: " + id));
         product.setActive(false);
         product.setUpdatedAt(Instant.now());
@@ -129,25 +131,31 @@ public class ProductService {
         }
     }
 
-    private void validateSkuUnique(CreateProductRequest request) {
+    private void validateSkuUnique(CreateProductRequest request, Product existing) {
+
+        List<String> skus = request.getVariants().stream()
+                .map(CreateProductRequest.Variant::getSku)
+                .toList();
+        List<Product> existingProducts = productRepository.findByVariantsSkuIn(skus);
+
         for (var v : request.getVariants()) {
-            if (productRepository.existsByVariantsSku(v.getSku())) {
+            boolean skuExists = existingProducts.stream()
+                    .anyMatch(p -> p.getVariants().stream()
+                            .anyMatch(pv -> pv.getSku().equals(v.getSku())));
+
+            if (!skuExists) continue;
+
+            // Khi update: cho phép SKU của chính product đó
+            boolean belongsToCurrent = existing != null
+                    && existing.getVariants().stream()
+                    .anyMatch(ev -> ev.getSku().equals(v.getSku()));
+            if (!belongsToCurrent) {
                 throw new DuplicateResourceException(ErrorMessages.SKU_EXISTS + ": " + v.getSku());
             }
         }
     }
 
-    private void validateSkuUniqueForUpdate(CreateProductRequest request, Product existing) {
-        for (var v : request.getVariants()) {
-            if (productRepository.existsByVariantsSku(v.getSku())) {
-                boolean belongsToCurrent = existing.getVariants().stream()
-                        .anyMatch(ev -> ev.getSku().equals(v.getSku()));
-                if (!belongsToCurrent) {
-                    throw new DuplicateResourceException(ErrorMessages.SKU_EXISTS + ": " + v.getSku());
-                }
-            }
-        }
-    }
+
 
     private List<String> uploadImages(List<MultipartFile> images) {
         if (images == null || images.isEmpty()) return List.of();
@@ -161,10 +169,14 @@ public class ProductService {
     }
 
     private String toSlug(String name) {
+        if (name == null || name.isBlank()) {
+            return "product";
+        }
         String slug = Normalizer.normalize(name, Normalizer.Form.NFD)
                 .replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
-        return slug.toLowerCase(Locale.ROOT)
+        slug = slug.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9]+", "-")
                 .replaceAll("^-|-$", "");
+        return slug.isBlank() ? "product-" + Math.abs(name.hashCode()) : slug;
     }
 }
