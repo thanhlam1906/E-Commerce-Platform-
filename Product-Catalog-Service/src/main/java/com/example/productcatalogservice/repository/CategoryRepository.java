@@ -7,16 +7,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.stereotype.Repository;
 
-import java.util.List;
-
 @Repository
 public interface CategoryRepository extends MongoRepository<Category, String> {
-
-    List<Category> findAllByStatus(CategoryStatus status);
 
     Page<Category> findAllByStatus(CategoryStatus status, Pageable pageable);
 
     boolean existsByNameAndStatus(String name, CategoryStatus status);
 
     boolean existsBySlugAndStatus(String slug, CategoryStatus status);
+
+    long countByParentIdAndStatus(String parentId, CategoryStatus status);
 }

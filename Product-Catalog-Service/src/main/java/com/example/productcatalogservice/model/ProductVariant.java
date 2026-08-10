@@ -21,7 +21,7 @@ public class ProductVariant {
     @Builder.Default
     private BigDecimal price = BigDecimal.ZERO;
     @Builder.Default
-    private Map<String, String> atrributes = new HashMap<>();
+    private Map<String, String> attributes = new HashMap<>();
     @Builder.Default
     private List<String> images = new ArrayList<>();
     private Integer stockQuantity;

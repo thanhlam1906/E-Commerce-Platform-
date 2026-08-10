@@ -5,7 +5,6 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
 import java.util.List;
@@ -17,11 +16,10 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ApiDataResponse<T> {
 
-    private boolean success;
+    private int code;
     private String message;
     private T data;
     private List<FieldError> errors;
-    private String httpStatus;
     private Instant timestamp;
 
     @Data
@@ -37,30 +35,27 @@ public class ApiDataResponse<T> {
 
     public static <T> ApiDataResponse<T> ok(T data) {
         return ApiDataResponse.<T>builder()
-                .success(true)
-                .message("Thành công")
+                .code(200)
+                .message("Success")
                 .data(data)
-                .httpStatus(HttpStatus.OK.name())
                 .timestamp(Instant.now())
                 .build();
     }
 
     public static <T> ApiDataResponse<T> created(T data) {
         return ApiDataResponse.<T>builder()
-                .success(true)
-                .message("Tạo mới thành công")
+                .code(201)
+                .message("Created")
                 .data(data)
-                .httpStatus(HttpStatus.CREATED.name())
                 .timestamp(Instant.now())
                 .build();
     }
 
-    public static <T> ApiDataResponse<T> error(HttpStatus status, String message, List<FieldError> errors) {
+    public static <T> ApiDataResponse<T> error(int code, String message, List<FieldError> errors) {
         return ApiDataResponse.<T>builder()
-                .success(false)
+                .code(code)
                 .message(message)
                 .errors(errors)
-                .httpStatus(status.name())
                 .timestamp(Instant.now())
                 .build();
     }

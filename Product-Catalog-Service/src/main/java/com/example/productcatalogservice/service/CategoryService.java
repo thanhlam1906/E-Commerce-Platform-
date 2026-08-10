@@ -26,11 +26,8 @@ public class CategoryService {
     private final CategoryMapper categoryMapper;
 
     public Page<CategoryResponse> findAllCategories(CategoryStatus status, Pageable pageable) {
-        if (status != null) {
-            return categoryRepository.findAllByStatus(status, pageable)
-                    .map(categoryMapper::toResponse);
-        }
-        return categoryRepository.findAll(pageable)
+        CategoryStatus effectiveStatus = (status != null) ? status : CategoryStatus.ACTIVE;
+        return categoryRepository.findAllByStatus(effectiveStatus, pageable)
                 .map(categoryMapper::toResponse);
     }
 
@@ -48,6 +45,8 @@ public class CategoryService {
         if (categoryRepository.existsBySlugAndStatus(request.getSlug(), CategoryStatus.ACTIVE)) {
             throw new DuplicateResourceException(ErrorMessages.CATEGORY_SLUG_EXISTS);
         }
+        validateParentCategory(request.getParentId());
+
         Category category = categoryMapper.toEntity(request);
         category.setStatus(CategoryStatus.ACTIVE);
         category.setCreatedAt(Instant.now());
@@ -69,6 +68,13 @@ public class CategoryService {
             throw new DuplicateResourceException(ErrorMessages.CATEGORY_SLUG_EXISTS);
         }
 
+        if (request.getParentId() != null) {
+            if (request.getParentId().equals(id)) {
+                throw new IllegalArgumentException("Danh mục không thể là cha của chính nó");
+            }
+            validateParentCategory(request.getParentId());
+        }
+
         category.setName(request.getName());
         category.setSlug(request.getSlug());
         category.setParentId(request.getParentId());
@@ -79,8 +85,25 @@ public class CategoryService {
     public void deleteCategory(String id) {
         Category category = categoryRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorMessages.CATEGORY_NOT_FOUND + " với id: " + id));
+
+        long childCount = categoryRepository.countByParentIdAndStatus(id, CategoryStatus.ACTIVE);
+        if (childCount > 0) {
+            throw new IllegalArgumentException("Không thể xóa danh mục đang có " + childCount
+                    + " danh mục con. Vui lòng xóa danh mục con trước.");
+        }
+
         category.setStatus(CategoryStatus.INACTIVE);
         category.setUpdatedAt(Instant.now());
         categoryRepository.save(category);
+    }
+
+    private void validateParentCategory(String parentId) {
+        if (parentId == null) {
+            return;
+        }
+        categoryRepository.findById(parentId)
+                .filter(p -> p.getStatus() == CategoryStatus.ACTIVE)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Danh mục cha không tìm thấy với id: " + parentId));
     }
 }

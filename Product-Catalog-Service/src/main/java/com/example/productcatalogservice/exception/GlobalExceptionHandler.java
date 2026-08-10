@@ -18,13 +18,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiDataResponse<Void>> handleNotFound(ResourceNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiDataResponse.error(HttpStatus.NOT_FOUND, ex.getMessage(), null));
+                .body(ApiDataResponse.error(404, ex.getMessage(), null));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleBadRequest(IllegalArgumentException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiDataResponse.error(400, ex.getMessage(), null));
     }
 
     @ExceptionHandler(DuplicateResourceException.class)
     public ResponseEntity<ApiDataResponse<Void>> handleDuplicate(DuplicateResourceException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ApiDataResponse.error(HttpStatus.CONFLICT, ex.getMessage(), null));
+                .body(ApiDataResponse.error(409, ex.getMessage(), null));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -37,13 +43,13 @@ public class GlobalExceptionHandler {
                 .toList();
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiDataResponse.error(HttpStatus.BAD_REQUEST, ErrorMessages.VALIDATION_FAILED, errors));
+                .body(ApiDataResponse.error(400, ErrorMessages.VALIDATION_FAILED, errors));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiDataResponse<Void>> handleGeneral(Exception ex) {
         log.error("Unhandled exception", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiDataResponse.error(HttpStatus.INTERNAL_SERVER_ERROR, ErrorMessages.INTERNAL_ERROR, null));
+                .body(ApiDataResponse.error(500, ErrorMessages.INTERNAL_ERROR, null));
     }
 }

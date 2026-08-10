@@ -6,6 +6,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -13,6 +15,10 @@ import java.time.Instant;
 @Document(collection = "categories")
 @Data
 @Builder
+@CompoundIndexes({
+    @CompoundIndex(def = "{'name' : 1, 'status' : 1}", unique = true),
+    @CompoundIndex(def = "{'slug' : 1, 'status' : 1}", unique = true)
+})
 @NoArgsConstructor
 @AllArgsConstructor
 public class Category {
