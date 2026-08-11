@@ -33,20 +33,7 @@ public class ProductController {
             @RequestPart("product") @Valid CreateProductRequest request,
             MultipartHttpServletRequest httpRequest) {
 
-        Map<Integer, List<MultipartFile>> variantImages = new HashMap<>();
-        for (String partName : httpRequest.getMultiFileMap().keySet()) {
-            if (partName.startsWith("images_")) {
-                try {
-                    int index = Integer.parseInt(partName.substring("images_".length()));
-                    variantImages.put(index, httpRequest.getFiles(partName));
-                } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException(
-                            "Tên part ảnh không hợp lệ: '" + partName
-                            + "'. Định dạng đúng: images_0, images_1, ...");
-                }
-            }
-        }
-
+        Map<Integer, List<MultipartFile>> variantImages = extractVariantImages(httpRequest);
         ProductResponse response = productService.createProduct(request, variantImages);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiDataResponse.created(response));
@@ -65,16 +52,36 @@ public class ProductController {
         return ResponseEntity.ok(ApiDataResponse.ok(productService.findProductById(id)));
     }
 
-    @PutMapping("/{id}")
+    @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiDataResponse<ProductResponse>> updateProduct(
             @PathVariable String id,
-            @Valid @RequestBody CreateProductRequest request) {
-        return ResponseEntity.ok(ApiDataResponse.ok(productService.updateProduct(id, request)));
+            @RequestPart("product") @Valid CreateProductRequest request,
+            MultipartHttpServletRequest httpRequest) {
+
+        Map<Integer, List<MultipartFile>> newImages = extractVariantImages(httpRequest);
+        return ResponseEntity.ok(ApiDataResponse.ok(productService.updateProduct(id, request, newImages)));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiDataResponse<Void>> deleteProduct(@PathVariable String id) {
         productService.deleteProduct(id);
         return ResponseEntity.ok(ApiDataResponse.ok(null));
+    }
+
+    private Map<Integer, List<MultipartFile>> extractVariantImages(MultipartHttpServletRequest request) {
+        Map<Integer, List<MultipartFile>> variantImages = new HashMap<>();
+        for (String partName : request.getMultiFileMap().keySet()) {
+            if (partName.startsWith("images_")) {
+                try {
+                    int index = Integer.parseInt(partName.substring("images_".length()));
+                    variantImages.put(index, request.getFiles(partName));
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            "Tên part ảnh không hợp lệ: '" + partName
+                            + "'. Định dạng đúng: images_0, images_1, ...");
+                }
+            }
+        }
+        return variantImages;
     }
 }

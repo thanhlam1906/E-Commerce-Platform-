@@ -78,7 +78,8 @@ public class ProductService {
 
     // ---- Update ----
 
-    public ProductResponse updateProduct(String id, CreateProductRequest request) {
+    public ProductResponse updateProduct(String id, CreateProductRequest request,
+                                         Map<Integer, List<MultipartFile>> newImages) {
         Product product = productRepository.findById(id)
                 .filter(Product::isActive)
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorMessages.PRODUCT_NOT_FOUND + " với id: " + id));
@@ -92,15 +93,27 @@ public class ProductService {
         product.setCategoryId(request.getCategoryId());
         product.setBrand(request.getBrand());
         List<ProductVariant> newVariants = new ArrayList<>();
-        for (int i = 0; i < request.getVariants().size(); i++){
+        for (int i = 0; i < request.getVariants().size(); i++) {
             var reqVar = request.getVariants().get(i);
             ProductVariant entity = productMapper.toVariant(reqVar);
 
-            // Nếu request không gửi ảnh mới → giữ ảnh cũ (nếu có variant cũ cùng index)
-            if ((reqVar.getImages() == null || reqVar.getImages().isEmpty())
-                    && i < product.getVariants().size()) {
-                entity.setImages(product.getVariants().get(i).getImages());
+            // Merge ảnh: giữ lại ảnh cũ + upload ảnh mới
+            List<String> finalImages = new ArrayList<>();
+
+            // Ảnh cũ user muốn giữ (null = không đụng đến → giữ nguyên tất cả ảnh cũ)
+            if (reqVar.getImages() != null) {
+                finalImages.addAll(reqVar.getImages());
+            } else if (i < product.getVariants().size()) {
+                finalImages.addAll(product.getVariants().get(i).getImages());
             }
+
+            // Ảnh mới upload
+            List<MultipartFile> files = newImages.get(i);
+            if (files != null && !files.isEmpty()) {
+                finalImages.addAll(uploadImages(files));
+            }
+
+            entity.setImages(finalImages);
             newVariants.add(entity);
         }
         product.setVariants(newVariants);
