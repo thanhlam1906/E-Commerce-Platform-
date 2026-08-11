@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.Index;
+import org.springframework.data.mongodb.core.index.TextIndexDefinition;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -22,5 +23,19 @@ public class MongoIndexConfig {
                         .on("variants.sku", Sort.Direction.ASC)
                         .unique()
                         .sparse());
+
+        // Slug unique — tránh trùng slug sinh từ tên sản phẩm
+        mongoTemplate.indexOps("products")
+                .ensureIndex(new Index()
+                        .on("slug", Sort.Direction.ASC)
+                        .unique()
+                        .sparse());
+
+        // Text index cho tìm kiếm name + description (thay cho regex scan toàn collection)
+        mongoTemplate.indexOps("products")
+                .ensureIndex(new TextIndexDefinition.TextIndexDefinitionBuilder()
+                        .onField("name")
+                        .onField("description")
+                        .build());
     }
 }

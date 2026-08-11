@@ -11,6 +11,7 @@ import com.example.productcatalogservice.model.ProductVariant;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import com.example.productcatalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -19,11 +20,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-
-import static java.util.regex.Pattern.quote;
 
 @Service
 @RequiredArgsConstructor
@@ -51,15 +51,14 @@ public class ProductService {
             product.getVariants().get(variantIndex).setImages(urls);
         }
 
-        return productMapper.toResponse(productRepository.save(product));
+        return productMapper.toResponse(saveProduct(product));
     }
 
     // ---- Read ----
 
     public Page<ProductResponse> findAllProducts(String categoryId, String keyword, Pageable pageable) {
         if (keyword != null && !keyword.isBlank()) {
-            String sanitized = quote(keyword);
-            return productRepository.findByNameContainingIgnoreCaseAndIsActiveTrue(sanitized, pageable)
+            return productRepository.searchByKeyword(keyword.trim(), pageable)
                     .map(productMapper::toResponse);
         }
         if (categoryId != null && !categoryId.isBlank()) {
@@ -92,34 +91,47 @@ public class ProductService {
         product.setDescription(request.getDescription());
         product.setCategoryId(request.getCategoryId());
         product.setBrand(request.getBrand());
-        List<ProductVariant> newVariants = new ArrayList<>();
+
+        // Merge variant theo SKU: trùng SKU → update, SKU mới → thêm mới, variant cũ không nằm trong request → giữ lại
+        Map<String, ProductVariant> existingBySku = new HashMap<>();
+        for (ProductVariant v : product.getVariants()) {
+            existingBySku.put(v.getSku(), v);
+        }
+
+        List<ProductVariant> mergedVariants = new ArrayList<>(product.getVariants());
         for (int i = 0; i < request.getVariants().size(); i++) {
             var reqVar = request.getVariants().get(i);
-            ProductVariant entity = productMapper.toVariant(reqVar);
+            ProductVariant existing = existingBySku.get(reqVar.getSku());
 
-            // Merge ảnh: giữ lại ảnh cũ + upload ảnh mới
-            List<String> finalImages = new ArrayList<>();
-
-            // Ảnh cũ user muốn giữ (null = không đụng đến → giữ nguyên tất cả ảnh cũ)
-            if (reqVar.getImages() != null) {
-                finalImages.addAll(reqVar.getImages());
-            } else if (i < product.getVariants().size()) {
-                finalImages.addAll(product.getVariants().get(i).getImages());
+            ProductVariant entity = existing != null ? existing : productMapper.toVariant(reqVar);
+            if (existing != null) {
+                entity.setName(reqVar.getName());
+                entity.setPrice(reqVar.getPrice());
+                entity.setAttributes(reqVar.getAttributes());
             }
 
-            // Ảnh mới upload
+            // Merge ảnh: giữ ảnh cũ (theo SKU) + upload ảnh mới
+            List<String> finalImages = new ArrayList<>();
+            if (reqVar.getImages() != null) {
+                finalImages.addAll(reqVar.getImages());
+            } else if (existing != null && existing.getImages() != null) {
+                finalImages.addAll(existing.getImages());
+            }
+
             List<MultipartFile> files = newImages.get(i);
             if (files != null && !files.isEmpty()) {
                 finalImages.addAll(uploadImages(files));
             }
 
             entity.setImages(finalImages);
-            newVariants.add(entity);
+            if (existing == null) {
+                mergedVariants.add(entity);
+            }
         }
-        product.setVariants(newVariants);
+        product.setVariants(mergedVariants);
         product.setUpdatedAt(Instant.now());
 
-        return productMapper.toResponse(productRepository.save(product));
+        return productMapper.toResponse(saveProduct(product));
     }
 
     // ---- Delete (soft) ----
@@ -134,6 +146,15 @@ public class ProductService {
     }
 
     // ---- Private helpers ----
+
+    private Product saveProduct(Product product) {
+        try {
+            return productRepository.save(product);
+        } catch (DuplicateKeyException e) {
+            // Unique index trên slug hoặc variants.sku bị trùng
+            throw new DuplicateResourceException(ErrorMessages.PRODUCT_SLUG_EXISTS);
+        }
+    }
 
     private void validateCategory(String categoryId) {
         if (categoryId == null) return;
