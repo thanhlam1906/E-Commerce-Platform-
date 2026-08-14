@@ -21,6 +21,7 @@ bin/
 
 # ====== Claude ======
 .claude/
+CLAUDE.md
 
 # ====== Docs ======
 docs/
