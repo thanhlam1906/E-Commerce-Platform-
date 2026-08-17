@@ -24,6 +24,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -83,6 +85,12 @@ public class ProductService {
                 .filter(Product::isActive)
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorMessages.PRODUCT_NOT_FOUND + " với id: " + id));
 
+        // Chụp toàn bộ ảnh cũ TRƯỚC khi merge (merge mutate trực tiếp list cũ)
+        Set<String> oldImages = product.getVariants().stream()
+                .filter(v -> v.getImages() != null)
+                .flatMap(v -> v.getImages().stream())
+                .collect(Collectors.toSet());
+
         validateCategory(request.getCategoryId());
         validateSkuUnique(request, product);
 
@@ -131,7 +139,17 @@ public class ProductService {
         product.setVariants(mergedVariants);
         product.setUpdatedAt(Instant.now());
 
-        return productMapper.toResponse(saveProduct(product));
+        Product saved = saveProduct(product);
+
+        // Xóa ảnh bị bỏ (best-effort) SAU khi save thành công — không throw ngược vào PUT
+        Set<String> finalImages = saved.getVariants().stream()
+                .filter(v -> v.getImages() != null)
+                .flatMap(v -> v.getImages().stream())
+                .collect(Collectors.toSet());
+        oldImages.removeAll(finalImages);
+        oldImages.forEach(cloudinaryService::deleteImage);
+
+        return productMapper.toResponse(saved);
     }
 
     // ---- Delete (soft) ----
