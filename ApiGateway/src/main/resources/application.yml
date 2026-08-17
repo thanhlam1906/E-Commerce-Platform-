@@ -1,0 +1,106 @@
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      routes:
+        # Login — stricter brute-force limit. ponytail: IP key; switch to
+        # email key resolver when identity-service + body caching land (Phase 2).
+        - id: login
+          uri: lb://identity-service
+          predicates:
+            - Path=/api/v1/auth/login
+            - Method=POST
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 5
+                key-resolver: "#{@ipKeyResolver}"
+        # Product Catalog (public read, protected write)
+        - id: product-catalog
+          uri: lb://Product-Catalog-Service
+          predicates:
+            - Path=/api/v1/products/**,/api/v1/categories/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                key-resolver: "#{@ipKeyResolver}"
+        # Identity Service
+        - id: identity
+          uri: lb://identity-service
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                key-resolver: "#{@ipKeyResolver}"
+        # Order & Inventory
+        - id: order
+          uri: lb://order-service
+          predicates:
+            - Path=/api/v1/orders/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                key-resolver: "#{@ipKeyResolver}"
+        # Payment — stricter limit
+        - id: payment
+          uri: lb://payment-service
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@ipKeyResolver}"
+        # Notification
+        - id: notification
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/v1/notifications/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                key-resolver: "#{@ipKeyResolver}"
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI:http://localhost:8081}
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  pattern:
+    console: '{"timestamp":"%d{ISO8601}","level":"%p","service":"${spring.application.name}","traceId":"%X{traceId:-}","spanId":"%X{spanId:-}","thread":"%t","logger":"%c","message":"%m"}%n'
+
+# Custom config
+gateway:
+  security:
+    enabled: ${GATEWAY_SECURITY_ENABLED:false}
+  cors:
+    allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:5173}
