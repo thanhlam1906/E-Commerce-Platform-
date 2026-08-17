@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -24,6 +25,11 @@ public class CloudinaryService {
     private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
             "image/jpeg", "image/png", "image/webp"
     );
+
+    // Trích public_id từ secure_url Cloudinary (upload folder "products", resource_type image)
+    private static final Pattern CLOUDINARY_UPLOAD_URL = Pattern.compile(
+            "^https://res\\.cloudinary\\.com/[^/]+/image/upload/(?:v\\d+/)?(.+)\\.(?:jpg|jpeg|png|webp)$",
+            Pattern.CASE_INSENSITIVE);
 
     // Magic bytes cho từng định dạng ảnh
     // ponytail: chỉ check 4 byte đầu, đủ để phân biệt JPEG/PNG/WebP. Nếu cần GIF thì thêm.
@@ -51,6 +57,30 @@ public class CloudinaryService {
             log.error("Upload ảnh thất bại", e);
             throw new RuntimeException("Không thể upload ảnh: " + e.getMessage());
         }
+    }
+
+    public void deleteImage(String secureUrl) {
+        String publicId = extractPublicId(secureUrl);
+        if (publicId == null) {
+            log.warn("Bỏ qua xóa: URL không phải Cloudinary upload hợp lệ: {}", secureUrl);
+            return;
+        }
+        try {
+            Map<?, ?> result = cloudinary.uploader().destroy(publicId,
+                    ObjectUtils.asMap("resource_type", "image", "invalidate", true));
+            if (!"ok".equals(result.get("result"))) {
+                log.warn("Cloudinary destroy trả '{}' cho publicId={}", result.get("result"), publicId);
+            }
+        } catch (IOException e) {
+            log.error("Xóa ảnh Cloudinary thất bại (ảnh sẽ mồ côi): publicId={}", publicId, e);
+        }
+    }
+
+    // package-private để test trực tiếp regex
+    static String extractPublicId(String secureUrl) {
+        if (secureUrl == null || secureUrl.isBlank()) return null;
+        var matcher = CLOUDINARY_UPLOAD_URL.matcher(secureUrl.trim());
+        return matcher.matches() ? matcher.group(1) : null;
     }
 
     private void validateFile(MultipartFile file) {

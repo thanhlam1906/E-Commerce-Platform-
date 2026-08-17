@@ -30,6 +30,5 @@ public class ProductResponse {
         private BigDecimal price;
         private Map<String, String> attributes;
         private List<String> images;
-        private Integer stockQuantity;
     }
 }

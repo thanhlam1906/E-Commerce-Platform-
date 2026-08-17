@@ -24,5 +24,4 @@ public class ProductVariant {
     private Map<String, String> attributes = new HashMap<>();
     @Builder.Default
     private List<String> images = new ArrayList<>();
-    private Integer stockQuantity;
 }
