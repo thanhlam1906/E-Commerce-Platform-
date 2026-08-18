@@ -36,7 +36,7 @@ spring:
         - id: identity
           uri: lb://identity-service
           predicates:
-            - Path=/api/v1/auth/**
+            - Path=/api/v1/auth/**,/api/v1/users/**
           filters:
             - name: RequestRateLimiter
               args:
@@ -80,7 +80,14 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${JWT_ISSUER_URI:http://localhost:8081}
+          jwk-set-uri: ${JWT_JWKS_URI:http://localhost:8082/.well-known/jwks.json}
+
+eureka:
+  instance:
+    hostname: ${INSTANCE_HOSTNAME:localhost}
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URI:http://localhost:8761/eureka/,http://localhost:8762/eureka/}
 
 server:
   port: 8080
@@ -101,6 +108,6 @@ logging:
 # Custom config
 gateway:
   security:
-    enabled: ${GATEWAY_SECURITY_ENABLED:false}
+    enabled: ${GATEWAY_SECURITY_ENABLED:true}
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:5173}

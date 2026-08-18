@@ -11,7 +11,7 @@ import org.springframework.security.web.server.SecurityWebFilterChain;
 @EnableWebFluxSecurity
 public class SecurityConfig {
 
-    @Value("${gateway.security.enabled:false}")
+    @Value("${gateway.security.enabled:true}")
     private boolean securityEnabled;
 
     /**
@@ -26,6 +26,7 @@ public class SecurityConfig {
         "POST /api/v1/auth/register",
         "POST /api/v1/auth/login",
         "POST /api/v1/auth/refresh",
+        "POST /api/v1/auth/logout",
         "GET /api/v1/auth/verify-email",
         "POST /api/v1/auth/forgot-password",
         "POST /api/v1/auth/reset-password",
