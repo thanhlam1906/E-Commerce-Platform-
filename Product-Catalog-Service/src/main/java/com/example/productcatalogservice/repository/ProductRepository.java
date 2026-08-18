@@ -14,6 +14,8 @@ public interface ProductRepository extends MongoRepository<Product, String> {
 
     Page<Product> findAllByIsActiveTrue(Pageable pageable);
 
+    Page<Product> findAllByIsActiveFalse(Pageable pageable);
+
     Page<Product> findByCategoryIdAndIsActiveTrue(String categoryId, Pageable pageable);
 
     @Query("{ $text: { $search: ?0 }, 'isActive': true }")

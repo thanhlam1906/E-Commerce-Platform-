@@ -13,6 +13,7 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
@@ -29,6 +30,7 @@ public class ProductController {
     private final ProductService productService;
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('PRODUCT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiDataResponse<ProductResponse>> createProduct(
             @RequestPart("product") @Valid CreateProductRequest request,
             MultipartHttpServletRequest httpRequest) {
@@ -47,12 +49,20 @@ public class ProductController {
         return ResponseEntity.ok(ApiDataResponse.ok(productService.findAllProducts(categoryId, keyword, pageable)));
     }
 
+    @GetMapping("/inactive")
+    @PreAuthorize("hasAnyRole('PRODUCT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiDataResponse<Page<ProductResponse>>> findInactiveProducts(
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(ApiDataResponse.ok(productService.findInactiveProducts(pageable)));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<ApiDataResponse<ProductResponse>> findProductById(@PathVariable String id) {
         return ResponseEntity.ok(ApiDataResponse.ok(productService.findProductById(id)));
     }
 
     @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('PRODUCT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiDataResponse<ProductResponse>> updateProduct(
             @PathVariable String id,
             @RequestPart("product") @Valid CreateProductRequest request,
@@ -63,6 +73,7 @@ public class ProductController {
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('PRODUCT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiDataResponse<Void>> deleteProduct(@PathVariable String id) {
         productService.deleteProduct(id);
         return ResponseEntity.ok(ApiDataResponse.ok(null));
