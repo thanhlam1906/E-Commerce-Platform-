@@ -5,6 +5,7 @@ import com.example.productcatalogservice.dto.response.ApiDataResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -31,6 +32,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiDataResponse<Void>> handleDuplicate(DuplicateResourceException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiDataResponse.error(409, ex.getMessage(), null));
+    }
+
+    @ExceptionHandler(AuthorizationDeniedException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleAccessDenied(AuthorizationDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiDataResponse.error(403, "Forbidden", null));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
