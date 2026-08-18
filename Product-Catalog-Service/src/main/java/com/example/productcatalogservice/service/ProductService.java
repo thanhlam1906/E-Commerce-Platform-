@@ -70,6 +70,10 @@ public class ProductService {
         return productRepository.findAllByIsActiveTrue(pageable).map(productMapper::toResponse);
     }
 
+    public Page<ProductResponse> findInactiveProducts(Pageable pageable) {
+        return productRepository.findAllByIsActiveFalse(pageable).map(productMapper::toResponse);
+    }
+
     public ProductResponse findProductById(String id) {
         Product product = productRepository.findById(id)
                 .filter(Product::isActive)

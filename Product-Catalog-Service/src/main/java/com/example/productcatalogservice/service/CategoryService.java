@@ -24,8 +24,14 @@ public class CategoryService {
     private final CategoryMapper categoryMapper;
 
     public Page<CategoryResponse> findAllCategories(CategoryStatus status, Pageable pageable) {
-        CategoryStatus effectiveStatus = (status != null) ? status : CategoryStatus.ACTIVE;
-        return categoryRepository.findAllByStatus(effectiveStatus, pageable)
+        // Public endpoint — luôn chỉ expose ACTIVE (không lộ category INACTIVE/soft-deleted).
+        // Param `status` giữ lại cho tương thích API nhưng cố ý bỏ qua; admin xem INACTIVE → endpoint riêng có @PreAuthorize.
+        return categoryRepository.findAllByStatus(CategoryStatus.ACTIVE, pageable)
+                .map(categoryMapper::toResponse);
+    }
+
+    public Page<CategoryResponse> findInactiveCategories(Pageable pageable) {
+        return categoryRepository.findAllByStatus(CategoryStatus.INACTIVE, pageable)
                 .map(categoryMapper::toResponse);
     }
 
