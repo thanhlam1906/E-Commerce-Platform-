@@ -1,0 +1,8 @@
+VoltStack Ecommerce
+Đơn hàng của bạn đã bị hủy
+
+Mã đơn hàng: [[${orderNumber}]]
+Lý do: [[${reason}]]
+Số tiền hoàn lại: [[${refundAmount}]]
+
+Nếu bạn có thắc mắc, vui lòng liên hệ bộ phận hỗ trợ của VoltStack.

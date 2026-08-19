@@ -1,0 +1,5 @@
+VoltStack Ecommerce
+Cập nhật trạng thái đơn hàng
+
+Mã đơn hàng: [[${orderNumber}]]
+Trạng thái mới: [[${newStatus}]]

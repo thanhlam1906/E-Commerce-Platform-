@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Thanh toán thành công</title>
+</head>
+<body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4;">
+<div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 24px;">
+    <h2 style="color: #1a73e8;">VoltStack Ecommerce</h2>
+    <h3>Thanh toán của bạn đã thành công</h3>
+    <p>Mã đơn hàng: <strong th:text="${orderNumber}">OR-000000</strong></p>
+    <p>Số tiền: <strong th:text="${amount}">0</strong></p>
+    <p>Mã giao dịch: <strong th:text="${transactionId}"></strong></p>
+    <p>Cảm ơn bạn đã mua sắm tại VoltStack!</p>
+</div>
+</body>
+</html>
