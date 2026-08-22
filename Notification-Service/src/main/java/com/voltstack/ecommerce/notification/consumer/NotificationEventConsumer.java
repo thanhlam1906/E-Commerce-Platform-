@@ -44,7 +44,7 @@ public class NotificationEventConsumer {
         this.deadLetterWriter = deadLetterWriter;
     }
 
-    @KafkaListener(topics = "${notification.kafka.events-topic}", groupId = "notification-service")
+    @KafkaListener(topics = "#{'${notification.kafka.events-topic}'.split(',')}", groupId = "notification-service")
     public void onEvent(String message, Acknowledgment ack) {
         try {
             JsonNode node = objectMapper.readTree(message);
