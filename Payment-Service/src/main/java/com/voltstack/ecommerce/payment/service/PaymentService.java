@@ -44,6 +44,9 @@ public class PaymentService {
     private boolean sandboxEnabled = false;
 
     // ---- PAY-002: synchronous create (SRS §3) ----
+    // No @Transactional on purpose: each repository call commits on its own, so a failed
+    // gateway call can mark EXPIRED, and a failed updateGatewayInfo leaves the PENDING row
+    // for the webhook/timeout to resolve. A method-level tx would roll the row back instead.
 
     public CreatePaymentResponse createPayment(CreatePaymentRequest req) {
         Gateway gatewayName = resolveGateway(req.getGateway());
@@ -51,29 +54,32 @@ public class PaymentService {
             // Sandbox is the only gateway impl today; with it disabled there is no selectable gateway.
             throw new IllegalArgumentException("Cổng thanh toán không được hỗ trợ: " + req.getGateway());
         }
-        UUID txnId = UUID.randomUUID();
         Instant now = Instant.now();
         Transaction txn = Transaction.builder()
-                .id(txnId).orderId(req.getOrderId()).userId(req.getUserId())
+                .orderId(req.getOrderId()).userId(req.getUserId())
                 .amount(req.getAmount()).currency(req.getCurrency())
                 .paymentMethod(req.getPaymentMethod()).gateway(gatewayName)
                 .status(TransactionStatus.PENDING).createdAt(now).updatedAt(now)
                 .build();
         transactionRepository.save(txn);
 
+        GatewayResult result;
         try {
-            GatewayResult result = gateway.createPayment(txnId, req.getAmount(), req.getCurrency(), req.getReturnUrl());
-            transactionRepository.updateGatewayInfo(txnId, result.paymentUrl(), result.gatewayTxnId());
-            return new CreatePaymentResponse(txnId, result.paymentUrl(), now.plus(Duration.ofMinutes(timeoutMinutes)));
+            result = gateway.createPayment(txn.getId(), req.getAmount(), req.getCurrency(), req.getReturnUrl());
         } catch (RuntimeException e) {
-            // No orphan PENDING: mark EXPIRED. The timeout scheduler is the crash-safety net.
+            // Only expire when the gateway call itself failed. A failed updateGatewayInfo after a
+            // successful gateway call must leave the txn PENDING for the webhook/timeout to resolve.
             try {
-                transactionRepository.expireIfPending(txnId);
+                transactionRepository.expireIfPending(txn.getId());
             } catch (RuntimeException ex) {
-                log.warn("Failed to expire orphaned transaction {}", txnId, ex);
+                log.warn("Failed to expire orphaned transaction {}", txn.getId(), ex);
             }
             throw new GatewayUnavailableException("Cổng thanh toán không khả dụng: " + e.getMessage());
         }
+        if (transactionRepository.updateGatewayInfo(txn.getId(), result.paymentUrl(), result.gatewayTxnId()) == 0) {
+            log.warn("Payment {} already moved (timeout expired it) before gateway info was stored", txn.getId());
+        }
+        return new CreatePaymentResponse(txn.getId(), result.paymentUrl(), now.plus(Duration.ofMinutes(timeoutMinutes)));
     }
 
     // ---- PAY-003: webhook (SRS §4) ----

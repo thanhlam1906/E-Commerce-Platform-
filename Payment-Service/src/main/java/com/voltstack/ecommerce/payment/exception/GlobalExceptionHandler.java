@@ -2,6 +2,7 @@ package com.voltstack.ecommerce.payment.exception;
 
 import com.voltstack.ecommerce.payment.dto.ApiDataResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -37,6 +38,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiDataResponse<Void>> handleInvalidState(InvalidPaymentStateException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiDataResponse.error(409, ex.getMessage(), null));
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.warn("Data integrity violation", ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiDataResponse.error(409, "Dữ liệu trùng lặp", null));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

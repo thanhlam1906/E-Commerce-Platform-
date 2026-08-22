@@ -1,6 +1,7 @@
 package com.voltstack.ecommerce.payment.security;
 
 import com.voltstack.ecommerce.payment.exception.ResourceNotFoundException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -13,7 +14,8 @@ public final class SecurityUtils {
     /** Returns the gateway-injected user id, or null when the caller is a guest. */
     public static UUID currentUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated()) {
+        // AnonymousAuthenticationToken: permitAll endpoint + no X-User-Id → guest (null), not "malformed".
+        if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {
             return null;
         }
         try {

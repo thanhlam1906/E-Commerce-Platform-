@@ -11,6 +11,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -34,6 +36,7 @@ public class OutboxEvent {
     private String aggregateId;
 
     @Column(nullable = false, columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
     private String payload;
 
     @Column(nullable = false)

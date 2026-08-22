@@ -23,9 +23,10 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
 
     List<Transaction> findByStatusAndCreatedAtBefore(TransactionStatus status, Instant createdAt);
 
-    /** Gateway createPayment succeeded: store the payment_url + gateway_txn_id. */
+    /** Gateway createPayment succeeded: store the payment_url + gateway_txn_id. The status='PENDING' guard
+     *  makes it safe outside a method-level transaction: the timeout scheduler may have expired the row already. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = "UPDATE transactions SET payment_url = :paymentUrl, gateway_txn_id = :gatewayTxnId, updated_at = now() WHERE id = :id", nativeQuery = true)
+    @Query(value = "UPDATE transactions SET payment_url = :paymentUrl, gateway_txn_id = :gatewayTxnId, updated_at = now() WHERE id = :id AND status = 'PENDING'", nativeQuery = true)
     int updateGatewayInfo(@Param("id") UUID id, @Param("paymentUrl") String paymentUrl, @Param("gatewayTxnId") String gatewayTxnId);
 
     /**

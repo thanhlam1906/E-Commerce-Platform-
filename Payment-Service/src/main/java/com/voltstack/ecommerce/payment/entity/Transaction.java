@@ -10,6 +10,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -66,6 +68,7 @@ public class Transaction {
     private BigDecimal refundAmount;
 
     @Column(name = "raw_webhook", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON) // bind as jsonb, else the insert fails with "expression is of type character varying"
     private String rawWebhook;
 
     @Column(name = "created_at", nullable = false, updatable = false)

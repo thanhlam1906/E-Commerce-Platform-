@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 
@@ -44,7 +45,10 @@ public class WebhookController {
     public ResponseEntity<Void> handleGateway(@PathVariable String gateway,
                                               @RequestBody(required = false) String rawBody,
                                               HttpServletRequest request) {
-        if (request.getContentLengthLong() > MAX_WEBHOOK_BODY_BYTES) {
+        // getContentLengthLong() is -1 for chunked bodies, so the header check alone can be bypassed;
+        // also guard on the actual parsed body size.
+        if (request.getContentLengthLong() > MAX_WEBHOOK_BODY_BYTES
+                || (rawBody != null && rawBody.getBytes(StandardCharsets.UTF_8).length > MAX_WEBHOOK_BODY_BYTES)) {
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
         }
         if (rawBody == null || rawBody.isBlank()) {

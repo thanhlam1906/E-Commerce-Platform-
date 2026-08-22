@@ -84,6 +84,11 @@ class PaymentServiceTest {
                     UUID txnId = inv.getArgument(0);
                     return new GatewayResult("http://localhost:8084/webhooks/sandbox/" + txnId + "?result=SUCCESS", "SB-" + txnId);
                 });
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+            Transaction t = inv.getArgument(0);
+            t.setId(UUID.randomUUID()); // Hibernate assigns the id at persist
+            return t;
+        });
 
         CreatePaymentResponse resp = paymentService.createPayment(request("VNPAY"));
 
@@ -112,6 +117,11 @@ class PaymentServiceTest {
     @Test
     void createPayment_gatewayFailure_marksExpiredAndThrows502() {
         when(gateway.createPayment(any(), any(), any(), any())).thenThrow(new RuntimeException("down"));
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+            Transaction t = inv.getArgument(0);
+            t.setId(UUID.randomUUID()); // Hibernate assigns the id at persist
+            return t;
+        });
 
         assertThrows(GatewayUnavailableException.class, () -> paymentService.createPayment(request("MOMO")));
 
