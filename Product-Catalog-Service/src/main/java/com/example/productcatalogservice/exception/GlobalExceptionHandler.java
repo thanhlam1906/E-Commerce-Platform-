@@ -5,6 +5,7 @@ import com.example.productcatalogservice.dto.response.ApiDataResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -46,6 +47,19 @@ public class GlobalExceptionHandler {
                 .map(fieldError -> ApiDataResponse.FieldError.builder()
                         .field(fieldError.getField())
                         .message(fieldError.getDefaultMessage())
+                        .build())
+                .toList();
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiDataResponse.error(400, ErrorMessages.VALIDATION_FAILED, errors));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleConstraintViolation(ConstraintViolationException ex) {
+        List<ApiDataResponse.FieldError> errors = ex.getConstraintViolations().stream()
+                .map(v -> ApiDataResponse.FieldError.builder()
+                        .field(v.getPropertyPath().toString())
+                        .message(v.getMessage())
                         .build())
                 .toList();
 

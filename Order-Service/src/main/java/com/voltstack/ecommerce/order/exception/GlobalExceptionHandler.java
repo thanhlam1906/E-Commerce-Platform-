@@ -43,6 +43,12 @@ public class GlobalExceptionHandler {
                 .body(ApiDataResponse.error(409, ex.getMessage(), null));
     }
 
+    @ExceptionHandler(CheckoutInProgressException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleCheckoutInProgress(CheckoutInProgressException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiDataResponse.error(409, ex.getMessage(), null));
+    }
+
     @ExceptionHandler(InsufficientStockException.class)
     public ResponseEntity<ApiDataResponse<Map<String, List<String>>>> handleOutOfStock(InsufficientStockException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

@@ -4,7 +4,11 @@ import com.example.productcatalogservice.dto.request.CreateProductRequest;
 import com.example.productcatalogservice.dto.response.ApiDataResponse;
 import com.example.productcatalogservice.dto.response.ProductResponse;
 import com.example.productcatalogservice.service.ProductService;
-import jakarta.validation.Valid;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Validator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -21,6 +25,7 @@ import org.springframework.web.multipart.MultipartHttpServletRequest;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/products")
@@ -28,13 +33,16 @@ import java.util.Map;
 public class ProductController {
 
     private final ProductService productService;
+    private final ObjectMapper objectMapper;
+    private final Validator validator;
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('PRODUCT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiDataResponse<ProductResponse>> createProduct(
-            @RequestPart("product") @Valid CreateProductRequest request,
+            @RequestPart("product") String productJson,
             MultipartHttpServletRequest httpRequest) {
 
+        CreateProductRequest request = parseProductRequest(productJson);
         Map<Integer, List<MultipartFile>> variantImages = extractVariantImages(httpRequest);
         ProductResponse response = productService.createProduct(request, variantImages);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -65,9 +73,10 @@ public class ProductController {
     @PreAuthorize("hasAnyRole('PRODUCT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiDataResponse<ProductResponse>> updateProduct(
             @PathVariable String id,
-            @RequestPart("product") @Valid CreateProductRequest request,
+            @RequestPart("product") String productJson,
             MultipartHttpServletRequest httpRequest) {
 
+        CreateProductRequest request = parseProductRequest(productJson);
         Map<Integer, List<MultipartFile>> newImages = extractVariantImages(httpRequest);
         return ResponseEntity.ok(ApiDataResponse.ok(productService.updateProduct(id, request, newImages)));
     }
@@ -77,6 +86,25 @@ public class ProductController {
     public ResponseEntity<ApiDataResponse<Void>> deleteProduct(@PathVariable String id) {
         productService.deleteProduct(id);
         return ResponseEntity.ok(ApiDataResponse.ok(null));
+    }
+
+    /**
+     * Part "product" từ Postman/browser không kèm Content-Type application/json
+     * (text/plain, octet-stream...) — đọc raw rồi tự parse + validate để không phụ thuộc
+     * content type của part. Giữ cấu trúc lỗi 400 giống @Valid.
+     */
+    private CreateProductRequest parseProductRequest(String productJson) {
+        CreateProductRequest request;
+        try {
+            request = objectMapper.readValue(productJson, CreateProductRequest.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("'product' không phải JSON hợp lệ");
+        }
+        Set<ConstraintViolation<CreateProductRequest>> violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
+        return request;
     }
 
     private Map<Integer, List<MultipartFile>> extractVariantImages(MultipartHttpServletRequest request) {

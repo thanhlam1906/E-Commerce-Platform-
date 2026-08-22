@@ -2,6 +2,7 @@ package com.voltstack.ecommerce.order.security;
 
 import com.voltstack.ecommerce.order.constant.ErrorMessages;
 import com.voltstack.ecommerce.order.exception.ResourceNotFoundException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -14,10 +15,16 @@ public final class SecurityUtils {
     /** Returns the gateway-injected user id, or null when the caller is a guest. */
     public static UUID currentUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated()) {
+        // AnonymousAuthenticationToken: permitAll endpoint + no X-User-Id → guest (null), not "malformed".
+        if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {
             return null;
         }
-        return UUID.fromString(auth.getName());
+        try {
+            return UUID.fromString(auth.getName());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            // Malformed X-User-Id (or an auth whose name is not a UUID) → clean 400, never a 500.
+            throw new IllegalArgumentException("X-User-Id không hợp lệ");
+        }
     }
 
     /** Like {@link #currentUserId()} but fails fast for endpoints that require login. */

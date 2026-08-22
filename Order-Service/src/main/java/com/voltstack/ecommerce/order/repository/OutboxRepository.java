@@ -11,8 +11,4 @@ public interface OutboxRepository extends JpaRepository<OutboxEvent, UUID> {
     List<OutboxEvent> findTop100ByPublishedFalseOrderByCreatedAt();
 
     boolean existsByEventTypeAndAggregateIdAndPublishedFalse(String eventType, String aggregateId);
-
-    java.util.Optional<OutboxEvent> findByEventTypeAndAggregateId(String eventType, String aggregateId);
-
-    void deleteByEventTypeAndAggregateId(String eventType, String aggregateId);
 }

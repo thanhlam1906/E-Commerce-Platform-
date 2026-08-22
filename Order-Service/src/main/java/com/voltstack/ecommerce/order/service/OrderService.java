@@ -16,6 +16,7 @@ import com.voltstack.ecommerce.order.entity.OrderItem;
 import com.voltstack.ecommerce.order.entity.OrderStatus;
 import com.voltstack.ecommerce.order.entity.OrderStatusHistory;
 import com.voltstack.ecommerce.order.entity.OutboxEvent;
+import com.voltstack.ecommerce.order.exception.CheckoutInProgressException;
 import com.voltstack.ecommerce.order.exception.InsufficientStockException;
 import com.voltstack.ecommerce.order.exception.InvalidOrderStateException;
 import com.voltstack.ecommerce.order.exception.PaymentUnavailableException;
@@ -106,7 +107,7 @@ public class OrderService {
         // Serialize checkout per user so two concurrent POST /orders cannot both read the same
         // cart, double-reserve and double-charge. Released in finally (or Redis TTL expires).
         if (!cartService.tryAcquireCheckoutLock(userId)) {
-            throw new IllegalStateException(ErrorMessages.CHECKOUT_IN_PROGRESS);
+            throw new CheckoutInProgressException(ErrorMessages.CHECKOUT_IN_PROGRESS);
         }
         try {
             List<CartService.CartItem> cart = cartService.readRawCart(null);
@@ -146,18 +147,7 @@ public class OrderService {
 
     private Order createOrderTx(UUID userId, CreateOrderRequest req, String idempotencyKey,
                                 List<CartService.CartItem> cart, Map<String, ProductSnapshot> snapshots) {
-        UUID orderId = UUID.randomUUID();
         String orderNumber = orderNumberGenerator.generate(orderRepository::existsByOrderNumber);
-
-        List<String> outOfStock = new ArrayList<>();
-        for (CartService.CartItem item : cart) {
-            if (!inventoryService.reserve(item.sku(), item.quantity(), "order:" + orderId)) {
-                outOfStock.add(item.sku());
-            }
-        }
-        if (!outOfStock.isEmpty()) {
-            throw new InsufficientStockException(outOfStock);
-        }
 
         BigDecimal totalAmount = BigDecimal.ZERO;
         List<OrderItem> items = new ArrayList<>();
@@ -172,7 +162,7 @@ public class OrderService {
         }
 
         Order order = Order.builder()
-                .id(orderId).userId(userId).email(req.getEmail()).orderNumber(orderNumber).status(OrderStatus.PENDING)
+                .userId(userId).email(req.getEmail()).orderNumber(orderNumber).status(OrderStatus.PENDING)
                 .totalAmount(totalAmount).currency("VND")
                 .shippingAddressSnapshot(req.getShippingAddress())
                 .paymentMethod(req.getPaymentMethod()).paymentGateway(PAYMENT_GATEWAY)
@@ -182,24 +172,30 @@ public class OrderService {
         for (OrderItem item : items) {
             item.setOrder(order);
         }
-        orderRepository.save(order);
+        orderRepository.save(order); // persist assigns the UUID; every reserve/release reference below uses it
 
-        historyRepository.save(OrderStatusHistory.builder().orderId(orderId)
+        List<String> outOfStock = new ArrayList<>();
+        for (CartService.CartItem item : cart) {
+            if (!inventoryService.reserve(item.sku(), item.quantity(), "order:" + order.getId())) {
+                outOfStock.add(item.sku());
+            }
+        }
+        if (!outOfStock.isEmpty()) {
+            throw new InsufficientStockException(outOfStock); // rolls back the insert and any earlier reserves
+        }
+
+        historyRepository.save(OrderStatusHistory.builder().orderId(order.getId())
                 .oldStatus(null).newStatus(OrderStatus.PENDING).changedBy(userId).reason("Order created").build());
-
-        outboxRepository.save(OutboxEvent.builder().eventType("OrderCreatedEvent")
-                .aggregateId(orderId.toString()).payload(orderCreatedPayload(order, null)).published(false).build());
         return order;
     }
 
     private void completePaymentTx(Order order, PaymentClient.PaymentResult payment) {
         orderRepository.updatePaymentInfo(order.getId(), payment.paymentUrl(), payment.transactionId());
-        // Keep published=false so OutboxPublisher relays it (with the payment URL) to Kafka.
-        outboxRepository.findByEventTypeAndAggregateId("OrderCreatedEvent", order.getId().toString())
-                .ifPresent(event -> {
-                    event.setPayload(orderCreatedPayload(order, payment.paymentUrl()));
-                    outboxRepository.save(event);
-                });
+        // Write the OrderCreatedEvent only now that the payment URL is known, so the relay never
+        // publishes an event with an empty link during the payment-call window.
+        outboxRepository.save(OutboxEvent.builder().eventType("OrderCreatedEvent")
+                .aggregateId(order.getId().toString())
+                .payload(orderCreatedPayload(order, payment.paymentUrl())).published(false).build());
     }
 
     private void compensateTx(UUID orderId, UUID userId) {
@@ -210,8 +206,6 @@ public class OrderService {
             historyRepository.save(OrderStatusHistory.builder().orderId(orderId)
                     .oldStatus(OrderStatus.PENDING).newStatus(OrderStatus.CANCELLED)
                     .changedBy(userId).reason("Payment unavailable, auto-cancelled").build());
-            // Drop the unpublished OrderCreatedEvent so a cancelled order is never announced.
-            outboxRepository.deleteByEventTypeAndAggregateId("OrderCreatedEvent", orderId.toString());
         }
     }
 

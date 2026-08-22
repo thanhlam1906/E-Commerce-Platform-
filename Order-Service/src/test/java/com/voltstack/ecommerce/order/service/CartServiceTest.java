@@ -108,6 +108,15 @@ class CartServiceTest {
     }
 
     @Test
+    void addItem_unknownSku_throwsSkuNotFound() {
+        setAuth();
+        when(productClient.getSnapshot("SKU-X")).thenThrow(new SkuNotFoundException("Sản phẩm không tồn tại: SKU-X"));
+
+        assertThrows(SkuNotFoundException.class,
+                () -> cartService.addItem(null, AddCartItemRequest.builder().sku("SKU-X").quantity(1).build()));
+    }
+
+    @Test
     void readRawCart_mapsEntriesToCartItems() {
         setAuth();
         Map<Object, Object> entries = new HashMap<>();

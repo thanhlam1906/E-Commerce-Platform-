@@ -22,7 +22,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -45,12 +44,7 @@ public class InventoryService {
         String reference = req.getReference() == null || req.getReference().isBlank()
                 ? "import_batch_" + UUID.randomUUID()
                 : req.getReference();
-        int rows = inventoryRepository.increaseQuantity(req.getSku(), req.getQuantity());
-        if (rows == 0) {
-            inventoryRepository.save(Inventory.builder()
-                    .sku(req.getSku()).quantity(req.getQuantity()).reserved(0).version(0L).updatedAt(Instant.now())
-                    .build());
-        }
+        inventoryRepository.upsertQuantity(req.getSku(), req.getQuantity());
         transactionRepository.save(InventoryTransaction.builder()
                 .sku(req.getSku()).type(InventoryTxnType.IMPORT).quantity(req.getQuantity()).reference(reference).build());
         emitLowStockIfNeeded(req.getSku());

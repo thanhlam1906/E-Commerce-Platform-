@@ -24,7 +24,13 @@ public interface InventoryRepository extends JpaRepository<Inventory, String> {
     @Query(value = "UPDATE inventory SET quantity = quantity - :q, reserved = GREATEST(reserved - :q, 0), version = version + 1, updated_at = now() WHERE sku = :sku", nativeQuery = true)
     int deduct(@Param("sku") String sku, @Param("q") int quantity);
 
+    // Single atomic upsert for import. save() on a natural-key entity would go through merge()
+    // and fail with StaleObjectState on a missing row, and a two-step UPDATE-then-INSERT would let
+    // two concurrent first-time imports of the same SKU both see "no row" and collide on the PK.
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = "UPDATE inventory SET quantity = quantity + :q, version = version + 1, updated_at = now() WHERE sku = :sku", nativeQuery = true)
-    int increaseQuantity(@Param("sku") String sku, @Param("q") int quantity);
+    @Query(value = "INSERT INTO inventory (sku, quantity, reserved, version, updated_at, low_stock_notified) " +
+            "VALUES (:sku, :q, 0, 0, now(), false) " +
+            "ON CONFLICT (sku) DO UPDATE SET quantity = inventory.quantity + :q, version = inventory.version + 1, updated_at = now()",
+            nativeQuery = true)
+    int upsertQuantity(@Param("sku") String sku, @Param("q") int quantity);
 }

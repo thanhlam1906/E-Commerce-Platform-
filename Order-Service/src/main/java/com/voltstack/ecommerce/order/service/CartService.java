@@ -61,6 +61,7 @@ public class CartService {
     }
 
     public CartResponse addItem(String sessionId, AddCartItemRequest req) {
+        productClient.getSnapshot(req.getSku()); // validate SKU tồn tại; SkuNotFoundException → 409
         String key = resolveKey(sessionId);
         redis.opsForHash().increment(key, req.getSku(), req.getQuantity());
         refreshTtl(key);

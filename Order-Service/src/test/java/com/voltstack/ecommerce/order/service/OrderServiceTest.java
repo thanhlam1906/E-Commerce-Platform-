@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -183,14 +184,13 @@ class OrderServiceTest {
 
         AtomicReference<Order> saved = new AtomicReference<>();
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
-            saved.set(inv.getArgument(0));
-            return inv.getArgument(0);
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID()); // Hibernate assigns the id at persist
+            saved.set(o);
+            return o;
         });
         when(orderRepository.findById(any(UUID.class))).thenAnswer(inv -> Optional.of(saved.get()));
 
-        OutboxEvent createdEvent = OutboxEvent.builder().id(UUID.randomUUID()).build();
-        when(outboxRepository.findByEventTypeAndAggregateId(eq("OrderCreatedEvent"), anyString()))
-                .thenReturn(Optional.of(createdEvent));
         when(paymentClient.createPayment(any(), any(), any(), eq("VND"), any(), any(), any()))
                 .thenReturn(new PaymentClient.PaymentResult(UUID.randomUUID(), "http://pay/vnpay", Instant.now().plusSeconds(300)));
 
@@ -199,13 +199,18 @@ class OrderServiceTest {
         assertEquals("PENDING", resp.getStatus());
         assertEquals("OR-20260819-00001", resp.getOrderNumber());
         assertEquals(0, saved.get().getTotalAmount().compareTo(new BigDecimal("200.00")));
+        // The id Hibernate assigned at persist is what the response, history and outbox must all carry.
+        assertNotNull(resp.getOrderId());
+        assertEquals(saved.get().getId(), resp.getOrderId());
         verify(orderRepository).save(argThat(o -> o.getStatus() == OrderStatus.PENDING));
-        verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.PENDING));
-        verify(outboxRepository).save(argThat(e -> "OrderCreatedEvent".equals(e.getEventType()) && !e.getPublished()));
+        verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.PENDING
+                && saved.get().getId().equals(h.getOrderId())));
+        verify(outboxRepository).save(argThat(e -> "OrderCreatedEvent".equals(e.getEventType()) && !e.getPublished()
+                && saved.get().getId().toString().equals(e.getAggregateId())));
+        // Inventory reservations are referenced by the persisted order id so compensation can release them.
+        verify(inventoryService).reserve("SKU1", 2, "order:" + saved.get().getId());
         verify(paymentClient).createPayment(any(), any(), any(), eq("VND"), any(), any(), any());
         verify(orderRepository).updatePaymentInfo(any(), eq("http://pay/vnpay"), any());
-        assertFalse(createdEvent.getPublished());
-        verify(outboxRepository).save(createdEvent);
         verify(cartService).removeItems(eq(null), any());
         verify(cartService, never()).clearCart(any());
         verify(cartService).releaseCheckoutLock(any());
@@ -224,8 +229,10 @@ class OrderServiceTest {
 
         AtomicReference<Order> saved = new AtomicReference<>();
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
-            saved.set(inv.getArgument(0));
-            return inv.getArgument(0);
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID()); // Hibernate assigns the id at persist
+            saved.set(o);
+            return o;
         });
         when(orderRepository.cancelIfActive(any(UUID.class))).thenReturn(1);
         when(orderItemRepository.findByOrderId(any(UUID.class))).thenReturn(List.of(item("SKU1", 2)));
@@ -238,7 +245,6 @@ class OrderServiceTest {
         verify(orderRepository).cancelIfActive(orderId);
         verify(inventoryService).release("SKU1", 2, "order:" + orderId);
         verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CANCELLED));
-        verify(outboxRepository).deleteByEventTypeAndAggregateId("OrderCreatedEvent", orderId.toString());
     }
 
     // ---- cancelOrder ----

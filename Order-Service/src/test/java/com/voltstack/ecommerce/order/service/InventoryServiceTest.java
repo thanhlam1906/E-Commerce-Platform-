@@ -52,29 +52,17 @@ class InventoryServiceTest {
     // ---- importStock ----
 
     @Test
-    void importStock_noExistingRow_savesNewInventory() {
+    void importStock_upsertsQuantityAndSavesTransaction() {
         ImportInventoryRequest req = ImportInventoryRequest.builder().sku("SKU1").quantity(10).build();
-        when(inventoryRepository.increaseQuantity("SKU1", 10)).thenReturn(0);
-        when(inventoryRepository.findBySku("SKU1")).thenReturn(Optional.of(inv(10, 0)));
+        when(inventoryRepository.findBySku("SKU1")).thenReturn(Optional.of(inv(20, 0)));
 
         ImportInventoryResponse resp = inventoryService.importStock(req);
 
-        verify(inventoryRepository).save(any(Inventory.class));
-        verify(transactionRepository).save(any(InventoryTransaction.class));
-        assertEquals(10, resp.getQuantity());
-        assertTrue(resp.getReference().startsWith("import_batch_"));
-    }
-
-    @Test
-    void importStock_existingRow_skipsSave() {
-        ImportInventoryRequest req = ImportInventoryRequest.builder().sku("SKU1").quantity(10).reference("batch-1").build();
-        when(inventoryRepository.increaseQuantity("SKU1", 10)).thenReturn(1);
-        when(inventoryRepository.findBySku("SKU1")).thenReturn(Optional.of(inv(20, 0)));
-
-        inventoryService.importStock(req);
-
+        verify(inventoryRepository).upsertQuantity("SKU1", 10);
         verify(inventoryRepository, never()).save(any(Inventory.class));
         verify(transactionRepository).save(argThatType(InventoryTxnType.IMPORT));
+        assertEquals(20, resp.getQuantity());
+        assertTrue(resp.getReference().startsWith("import_batch_"));
     }
 
     // ---- reserve ----
@@ -144,7 +132,6 @@ class InventoryServiceTest {
     @Test
     void lowStockEvent_notEmittedWhenAlreadyNotified() {
         ImportInventoryRequest req = ImportInventoryRequest.builder().sku("SKU1").quantity(1).build();
-        when(inventoryRepository.increaseQuantity("SKU1", 1)).thenReturn(1);
         Inventory alreadyNotified = Inventory.builder().sku("SKU1").quantity(2).reserved(0)
                 .lowStockNotified(true).updatedAt(Instant.now()).build();
         when(inventoryRepository.findBySku("SKU1")).thenReturn(Optional.of(alreadyNotified));
@@ -158,7 +145,6 @@ class InventoryServiceTest {
     @Test
     void lowStockEvent_emittedWhenBelowThresholdAndNotNotified() throws Exception {
         ImportInventoryRequest req = ImportInventoryRequest.builder().sku("SKU1").quantity(1).build();
-        when(inventoryRepository.increaseQuantity("SKU1", 1)).thenReturn(1);
         when(inventoryRepository.findBySku("SKU1")).thenReturn(Optional.of(inv(2, 0)));
         when(objectMapper.writeValueAsString(any())).thenReturn("{}");
 
