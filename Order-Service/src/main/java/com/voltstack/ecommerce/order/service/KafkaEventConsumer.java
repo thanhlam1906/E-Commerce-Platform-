@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.voltstack.ecommerce.order.entity.ConsumedEvent;
+import com.voltstack.ecommerce.order.entity.Order;
 import com.voltstack.ecommerce.order.entity.OrderItem;
 import com.voltstack.ecommerce.order.entity.OrderStatus;
 import com.voltstack.ecommerce.order.entity.OrderStatusHistory;
@@ -19,6 +20,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -83,21 +85,33 @@ public class KafkaEventConsumer {
             historyRepository.save(OrderStatusHistory.builder()
                     .orderId(orderId).oldStatus(OrderStatus.PENDING).newStatus(newStatus)
                     .changedBy(null).reason("Payment event: " + action).build());
-            if (action.equals("COMPLETED")) {
-                emitOrderStatusEvent(orderId, OrderStatus.CONFIRMED);
-            }
+            // Notify on every payment outcome, not just success: FAILED/TIMEOUT must also
+            // produce an email (cancelled / expired), or users never hear their order died.
+            emitOrderStatusEvent(orderId, newStatus);
         }
         consumedEventRepository.save(ConsumedEvent.builder().eventId(eventId).eventType(action).build());
     }
 
-    /** Order confirmed is the event Notification consumes ("order confirmed" email). */
+    /** Order confirmed is the event Notification consumes ("order confirmed" email).
+     *  Notification drops OrderStatusChangedEvent without a recipient email (dead letter),
+     *  so the payload must carry email + userId + oldStatus + newStatus like OrderService.emitOutbox. */
     private void emitOrderStatusEvent(UUID orderId, OrderStatus status) {
         try {
+            Order order = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new IllegalStateException("Order not found for status event: " + orderId));
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("eventId", UUID.randomUUID().toString());
+            payload.put("eventType", "OrderStatusChangedEvent");
+            payload.put("orderId", orderId.toString());
+            payload.put("email", order.getEmail());
+            payload.put("userId", order.getUserId().toString());
+            // transition() already ran, so order.getStatus() is the new status — old is always PENDING.
+            payload.put("oldStatus", OrderStatus.PENDING.name());
+            payload.put("newStatus", status.name());
+            payload.put("status", status.name());
             outboxRepository.save(OutboxEvent.builder().eventType("OrderStatusChangedEvent")
                     .aggregateId(orderId.toString())
-                    .payload(objectMapper.writeValueAsString(Map.of(
-                            "eventId", UUID.randomUUID().toString(), "eventType", "OrderStatusChangedEvent",
-                            "orderId", orderId.toString(), "status", status.name())))
+                    .payload(objectMapper.writeValueAsString(payload))
                     .published(false).build());
         } catch (JsonProcessingException e) {
             log.error("Failed to build OrderStatusChangedEvent for order {}", orderId, e);

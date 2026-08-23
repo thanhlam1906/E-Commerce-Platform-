@@ -44,7 +44,7 @@ public class RateLimiter {
     public boolean isLimited(String recipient) {
         String key = "throttle:EMAIL:" + recipient;
         try {
-            Long count = redisTemplate.execute(incrAndExpireScript, List.of(key), 60);
+            Long count = redisTemplate.execute(incrAndExpireScript, List.of(key), "60");
             if (count != null && count > maxPerMinute) {
                 redisTemplate.opsForValue().decrement(key); // refund the token we are not spending
                 return true;
