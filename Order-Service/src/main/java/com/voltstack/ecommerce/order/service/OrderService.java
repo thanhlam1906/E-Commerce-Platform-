@@ -135,7 +135,10 @@ public class OrderService {
                 transactionTemplate.executeWithoutResult(s -> completePaymentTx(order, payment));
                 // Remove only the ordered SKUs — items the user added during the payment call survive.
                 cartService.removeItems(null, cart.stream().map(CartService.CartItem::sku).toList());
-                return toCheckoutResponse(orderRepository.findById(order.getId()).orElseThrow());
+                CheckoutResponse response = toCheckoutResponse(orderRepository.findById(order.getId()).orElseThrow());
+                // Not persisted — the QR is for the immediate post-checkout "quét mã QR" screen.
+                response.setQrImage(payment.qrImage());
+                return response;
             } catch (PaymentUnavailableException e) {
                 transactionTemplate.executeWithoutResult(s -> compensateTx(order.getId(), userId));
                 throw e;

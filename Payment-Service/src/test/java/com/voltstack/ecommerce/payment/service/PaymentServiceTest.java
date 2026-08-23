@@ -10,6 +10,7 @@ import com.voltstack.ecommerce.payment.exception.GatewayUnavailableException;
 import com.voltstack.ecommerce.payment.exception.InvalidPaymentStateException;
 import com.voltstack.ecommerce.payment.exception.ResourceNotFoundException;
 import com.voltstack.ecommerce.payment.exception.WebhookSignatureException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.voltstack.ecommerce.payment.gateway.GatewayResult;
 import com.voltstack.ecommerce.payment.gateway.PaymentGateway;
 import com.voltstack.ecommerce.payment.repository.TransactionRepository;
@@ -56,7 +57,9 @@ class PaymentServiceTest {
         gateway = mock(PaymentGateway.class);
         signatureVerifier = mock(WebhookSignatureVerifier.class);
         eventPublisher = mock(PaymentEventPublisher.class);
-        paymentService = new PaymentService(transactionRepository, gateway, signatureVerifier, eventPublisher);
+        // Strategy map: tests run with the SANDBOX bean wired (dev flow). VNPAY bean is exercised in VnPayGatewayTest.
+        Map<String, PaymentGateway> gateways = Map.of("SANDBOX", gateway);
+        paymentService = new PaymentService(transactionRepository, gateways, signatureVerifier, eventPublisher, new ObjectMapper());
         ReflectionTestUtils.setField(paymentService, "timeoutMinutes", 15L);
         // Sandbox is off by default now; createPayment happy paths run against an explicitly-enabled dev gateway.
         ReflectionTestUtils.setField(paymentService, "sandboxEnabled", true);
@@ -82,7 +85,7 @@ class PaymentServiceTest {
         when(gateway.createPayment(any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     UUID txnId = inv.getArgument(0);
-                    return new GatewayResult("http://localhost:8084/webhooks/sandbox/" + txnId + "?result=SUCCESS", "SB-" + txnId);
+                    return new GatewayResult("http://localhost:8084/webhooks/sandbox/" + txnId + "?result=SUCCESS", "SB-" + txnId, null);
                 });
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
             Transaction t = inv.getArgument(0);
@@ -309,6 +312,32 @@ class PaymentServiceTest {
         paymentService.refund(txn.getId(), txn.getOrderId());
 
         verify(eventPublisher, never()).publishRefunded(any());
+    }
+
+    @Test
+    void handleVnPayNotify_success_amountMatches_publishesCompleted() {
+        when(signatureVerifier.verify(anyString(), any(), any())).thenReturn(true);
+        Transaction txn = pendingTxn("SB-AMT");
+        when(transactionRepository.findByGatewayTxnId("SB-AMT")).thenReturn(Optional.of(txn));
+        when(transactionRepository.applyWebhookResult(any(), any(), anyString(), eq("SUCCESS"))).thenReturn(1);
+
+        paymentService.handleVnPayNotify(Map.of(
+                "vnp_TxnRef", "SB-AMT", "vnp_TransactionStatus", "00", "vnp_Amount", "10000"));
+
+        verify(eventPublisher).publishCompleted(txn);
+    }
+
+    @Test
+    void handleVnPayNotify_amountMismatch_rejectsWithoutConfirming() {
+        when(signatureVerifier.verify(anyString(), any(), any())).thenReturn(true);
+        Transaction txn = pendingTxn("SB-AMT2"); // amount 100.00 VND → expected 10000 on the wire
+        when(transactionRepository.findByGatewayTxnId("SB-AMT2")).thenReturn(Optional.of(txn));
+
+        assertThrows(IllegalArgumentException.class, () -> paymentService.handleVnPayNotify(Map.of(
+                "vnp_TxnRef", "SB-AMT2", "vnp_TransactionStatus", "00", "vnp_Amount", "12345")));
+
+        verify(transactionRepository, never()).applyWebhookResult(any(), any(), any(), any());
+        verify(eventPublisher, never()).publishCompleted(any());
     }
 
     @Test

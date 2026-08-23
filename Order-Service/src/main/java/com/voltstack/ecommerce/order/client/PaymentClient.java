@@ -59,7 +59,7 @@ public class PaymentClient {
             if (resp == null || resp.transactionId() == null || resp.paymentUrl() == null) {
                 throw new PaymentUnavailableException("Payment service trả về dữ liệu không hợp lệ");
             }
-            return new PaymentResult(resp.transactionId(), resp.paymentUrl(), resp.expiresAt());
+            return new PaymentResult(resp.transactionId(), resp.paymentUrl(), resp.expiresAt(), resp.qrImage());
         } catch (RestClientException e) {
             throw new PaymentUnavailableException("Không thể kết nối tới Payment service: " + e.getMessage());
         }
@@ -79,7 +79,7 @@ public class PaymentClient {
         }
     }
 
-    public record PaymentResult(UUID transactionId, String paymentUrl, Instant expiresAt) {}
+    public record PaymentResult(UUID transactionId, String paymentUrl, Instant expiresAt, String qrImage) {}
 
-    private record PaymentResponse(UUID transactionId, String paymentUrl, Instant expiresAt) {}
+    private record PaymentResponse(UUID transactionId, String paymentUrl, Instant expiresAt, String qrImage) {}
 }

@@ -1,5 +1,6 @@
 package com.voltstack.ecommerce.payment.service;
 
+import com.voltstack.ecommerce.payment.gateway.VnPayCrypto;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.Mac;
@@ -52,9 +53,14 @@ class WebhookSignatureVerifierTest {
     }
 
     @Test
-    void verify_validVnpaySignature_usesSha512() {
+    void verify_validVnpaySignature_usesSha512UrlEncoded() {
         WebhookSignatureVerifier verifier = new WebhookSignatureVerifier(VNPAY_SECRET, "", "", false);
-        assertTrue(verifier.verify("VNPAY", payloadWithSignature("VNPAY", VNPAY_SECRET), null));
+        // VNPay carries the signature as vnp_SecureHash over URL-encoded canonical params (shared VnPayCrypto).
+        Map<String, Object> payload = Map.of(
+                "gatewayTxnId", "SB-1",
+                "status", "SUCCESS",
+                "vnp_SecureHash", VnPayCrypto.sign(VNPAY_SECRET, Map.of("gatewayTxnId", "SB-1", "status", "SUCCESS")));
+        assertTrue(verifier.verify("VNPAY", payload, null));
     }
 
     @Test

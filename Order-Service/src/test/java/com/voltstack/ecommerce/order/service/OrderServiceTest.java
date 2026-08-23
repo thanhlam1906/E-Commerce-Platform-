@@ -192,7 +192,7 @@ class OrderServiceTest {
         when(orderRepository.findById(any(UUID.class))).thenAnswer(inv -> Optional.of(saved.get()));
 
         when(paymentClient.createPayment(any(), any(), any(), eq("VND"), any(), any(), any()))
-                .thenReturn(new PaymentClient.PaymentResult(UUID.randomUUID(), "http://pay/vnpay", Instant.now().plusSeconds(300)));
+                .thenReturn(new PaymentClient.PaymentResult(UUID.randomUUID(), "http://pay/vnpay", Instant.now().plusSeconds(300), null));
 
         CheckoutResponse resp = orderService.createOrder(orderRequest(), "key-12345678");
 
