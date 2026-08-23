@@ -5,7 +5,8 @@ spring:
     config:
       server:
         git:
-          uri: file:///D:/tmp/voltstack-config
+          uri: https://github.com/thanhlam1906/ecommerce-config.git
+          default-label: main
 
 server:
   port: 8888

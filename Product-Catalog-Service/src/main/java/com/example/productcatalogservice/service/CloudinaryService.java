@@ -10,7 +10,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -22,9 +21,6 @@ public class CloudinaryService {
 
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
     private static final String FOLDER = "products";
-    private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
-            "image/jpeg", "image/png", "image/webp"
-    );
 
     // Trích public_id từ secure_url Cloudinary (upload folder "products", resource_type image)
     private static final Pattern CLOUDINARY_UPLOAD_URL = Pattern.compile(
@@ -83,7 +79,8 @@ public class CloudinaryService {
         return matcher.matches() ? matcher.group(1) : null;
     }
 
-    private void validateFile(MultipartFile file) {
+    // package-private để test trực tiếp
+    void validateFile(MultipartFile file) {
         if (file.isEmpty()) {
             throw new IllegalArgumentException("File ảnh trống");
         }
@@ -91,13 +88,10 @@ public class CloudinaryService {
             throw new IllegalArgumentException("File ảnh vượt quá 10MB");
         }
 
-        // Kiểm tra MIME type (whitelist) — chặn SVG (XSS) và các định dạng lạ
-        String contentType = file.getContentType();
-        if (contentType == null || !ALLOWED_MIME_TYPES.contains(contentType)) {
-            throw new IllegalArgumentException("Chỉ chấp nhận file ảnh (jpg, png, webp)");
-        }
-
-        // Kiểm tra magic bytes — chống MIME spoofing (đổi header Content-Type để qua mặt)
+        // Không kiểm tra MIME header: client/gateway không giữ content-type đáng tin trên part
+        // multipart (Postman gửi application/octet-stream, gateway có thể làm mất). Magic bytes
+        // bên dưới là guard thật — chỉ chấp nhận header JPEG/PNG/WebP, reject SVG (XML text) và
+        // mọi định dạng khác, nên vẫn chặn được XSS và MIME spoofing.
         try (InputStream in = file.getInputStream()) {
             byte[] header = new byte[4];
             int bytesRead = in.read(header);

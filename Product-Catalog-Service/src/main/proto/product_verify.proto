@@ -1,0 +1,17 @@
+syntax = "proto3";
+package productcatalog;
+option java_package = "com.voltstack.ecommerce.grpc";
+option java_multiple_files = true;
+option java_outer_classname = "ProductVerifyProto";
+message SkuRequest { string sku = 1; }
+message ProductSnapshot {
+  string sku = 1;
+  string product_name = 2;
+  string variant_name = 3;
+  string price = 4;
+}
+message VerifySkuResponse { bool exists = 1; ProductSnapshot snapshot = 2; }
+service ProductVerifyService {
+  rpc VerifySku(SkuRequest) returns (VerifySkuResponse);
+  rpc GetProductSnapshot(SkuRequest) returns (ProductSnapshot);
+}
