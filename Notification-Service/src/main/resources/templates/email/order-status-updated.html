@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Cập nhật trạng thái đơn hàng</title>
+</head>
+<body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4;">
+<div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 24px;">
+    <h2 style="color: #1a73e8;">VoltStack Ecommerce</h2>
+    <h3>Cập nhật trạng thái đơn hàng</h3>
+    <p>Mã đơn hàng: <strong th:text="${orderNumber}">OR-000000</strong></p>
+    <p th:if="${oldStatus != null}">Trạng thái trước: <strong th:text="${oldStatus}"></strong></p>
+    <p>Trạng thái mới: <strong th:text="${newStatus}">ĐANG XỬ LÝ</strong></p>
+</div>
+</body>
+</html>

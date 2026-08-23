@@ -1,0 +1,7 @@
+VoltStack Ecommerce
+Đơn hàng của bạn đã được tạo
+
+Mã đơn hàng: [[${orderNumber}]]
+Tổng tiền: [[${totalAmount}]] [[${currency}]]
+
+Cảm ơn bạn đã mua sắm tại VoltStack!

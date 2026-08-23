@@ -1,0 +1,8 @@
+VoltStack Ecommerce
+Thanh toán của bạn đã thành công
+
+Mã đơn hàng: [[${orderNumber}]]
+Số tiền: [[${amount}]]
+Mã giao dịch: [[${transactionId}]]
+
+Cảm ơn bạn đã mua sắm tại VoltStack!

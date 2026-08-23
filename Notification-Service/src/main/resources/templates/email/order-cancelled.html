@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Đơn hàng đã bị hủy</title>
+</head>
+<body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4;">
+<div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 24px;">
+    <h2 style="color: #1a73e8;">VoltStack Ecommerce</h2>
+    <h3>Đơn hàng của bạn đã bị hủy</h3>
+    <p>Mã đơn hàng: <strong th:text="${orderNumber}">OR-000000</strong></p>
+    <p th:if="${reason != null}">Lý do: <strong th:text="${reason}"></strong></p>
+    <p th:if="${refundAmount != null}">Số tiền hoàn lại: <strong th:text="${refundAmount}"></strong></p>
+    <p>Nếu bạn có thắc mắc, vui lòng liên hệ bộ phận hỗ trợ của VoltStack.</p>
+</div>
+</body>
+</html>
