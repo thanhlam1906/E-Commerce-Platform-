@@ -12,7 +12,7 @@ import java.util.UUID;
  * webhook sandbox simulator so a developer (or a browser redirect) can complete the flow manually.
  */
 @Slf4j
-@Component
+@Component("SANDBOX")
 public class SandboxPaymentGateway implements PaymentGateway {
 
     private final String returnUrlBase;
@@ -26,6 +26,6 @@ public class SandboxPaymentGateway implements PaymentGateway {
         String paymentUrl = returnUrlBase + "/webhooks/sandbox/" + transactionId + "?result=SUCCESS";
         String gatewayTxnId = "SB-" + transactionId;
         log.info("Sandbox payment created: transactionId={}, amount={} {}, gatewayTxnId={}", transactionId, amount, currency, gatewayTxnId);
-        return new GatewayResult(paymentUrl, gatewayTxnId);
+        return new GatewayResult(paymentUrl, gatewayTxnId, null);
     }
 }

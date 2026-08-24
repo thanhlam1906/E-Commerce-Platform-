@@ -47,7 +47,7 @@ class InternalPaymentControllerTest {
     @Test
     void createPayment_valid_returns200WithContract() throws Exception {
         when(paymentService.createPayment(any(CreatePaymentRequest.class)))
-                .thenReturn(new CreatePaymentResponse(TXN_ID, "http://pay.example/url", Instant.parse("2026-08-19T00:00:00Z")));
+                .thenReturn(new CreatePaymentResponse(TXN_ID, "http://pay.example/url", Instant.parse("2026-08-19T00:00:00Z"), null));
 
         mockMvc.perform(post("/internal/payments")
                         .contentType(MediaType.APPLICATION_JSON)

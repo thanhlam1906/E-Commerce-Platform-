@@ -15,6 +15,7 @@ public final class ErrorMessages {
     public static final String IDEMPOTENCY_KEY_EXPIRED = "Idempotency-Key đã dùng cho đơn bị hủy/hết hạn — dùng key mới";
     public static final String CHECKOUT_IN_PROGRESS = "Đang có giao dịch thanh toán cho tài khoản này, vui lòng thử lại";
     public static final String INVALID_ITEM_QUANTITY = "Số lượng không hợp lệ";
+    public static final String PAYMENT_METHOD_UNSUPPORTED = "Phương thức thanh toán không được hỗ trợ";
     public static final String INVENTORY_NOT_FOUND = "Không tìm thấy tồn kho cho SKU này";
     public static final String VALIDATION_FAILED = "Dữ liệu không hợp lệ";
     public static final String INTERNAL_ERROR = "Lỗi hệ thống";

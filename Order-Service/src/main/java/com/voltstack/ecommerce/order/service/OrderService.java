@@ -52,6 +52,8 @@ public class OrderService {
 
     private static final Pattern IDEMPOTENCY_KEY_PATTERN = Pattern.compile("[A-Za-z0-9_-]{8,64}");
     private static final String PAYMENT_GATEWAY = "VNPAY";
+    private static final String PAYMENT_METHOD_COD = "COD";
+    private static final String PAYMENT_METHOD_VNPAY_QR = "VNPAY_QR";
 
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
@@ -93,6 +95,7 @@ public class OrderService {
     public CheckoutResponse createOrder(CreateOrderRequest req, String idempotencyKey) {
         UUID userId = SecurityUtils.requireUserId();
         validateIdempotencyKey(idempotencyKey);
+        req.setPaymentMethod(normalizePaymentMethod(req.getPaymentMethod()));
 
         if (idempotencyKey != null) {
             Order existing = orderRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey).orElse(null);
@@ -128,14 +131,27 @@ public class OrderService {
             }
 
             try {
-                String returnUrl = (paymentReturnUrl == null || paymentReturnUrl.isBlank()) ? null : paymentReturnUrl;
-                PaymentClient.PaymentResult payment = paymentClient.createPayment(
-                        order.getId(), userId, order.getTotalAmount(), "VND",
-                        order.getPaymentMethod(), PAYMENT_GATEWAY, returnUrl);
-                transactionTemplate.executeWithoutResult(s -> completePaymentTx(order, payment));
+                String qrImage = null;
+                if (isCod(order.getPaymentMethod())) {
+                    // COD: no gateway transaction, no payment URL/QR. Order stays PENDING awaiting merchant
+                    // (admin) confirmation; emit OrderCreatedEvent now — nothing later enriches it with a URL.
+                    transactionTemplate.executeWithoutResult(s -> outboxRepository.save(OutboxEvent.builder()
+                            .eventType("OrderCreatedEvent").aggregateId(order.getId().toString())
+                            .payload(orderCreatedPayload(order, null)).published(false).build()));
+                } else {
+                    String returnUrl = (paymentReturnUrl == null || paymentReturnUrl.isBlank()) ? null : paymentReturnUrl;
+                    PaymentClient.PaymentResult payment = paymentClient.createPayment(
+                            order.getId(), userId, order.getTotalAmount(), "VND",
+                            order.getPaymentMethod(), PAYMENT_GATEWAY, returnUrl);
+                    transactionTemplate.executeWithoutResult(s -> completePaymentTx(order, payment));
+                    qrImage = payment.qrImage();
+                }
                 // Remove only the ordered SKUs — items the user added during the payment call survive.
                 cartService.removeItems(null, cart.stream().map(CartService.CartItem::sku).toList());
-                return toCheckoutResponse(orderRepository.findById(order.getId()).orElseThrow());
+                CheckoutResponse response = toCheckoutResponse(orderRepository.findById(order.getId()).orElseThrow());
+                // Not persisted — the QR is for the immediate post-checkout "quét mã QR" screen (COD has none).
+                response.setQrImage(qrImage);
+                return response;
             } catch (PaymentUnavailableException e) {
                 transactionTemplate.executeWithoutResult(s -> compensateTx(order.getId(), userId));
                 throw e;
@@ -165,7 +181,7 @@ public class OrderService {
                 .userId(userId).email(req.getEmail()).orderNumber(orderNumber).status(OrderStatus.PENDING)
                 .totalAmount(totalAmount).currency("VND")
                 .shippingAddressSnapshot(req.getShippingAddress())
-                .paymentMethod(req.getPaymentMethod()).paymentGateway(PAYMENT_GATEWAY)
+                .paymentMethod(req.getPaymentMethod()).paymentGateway(isCod(req.getPaymentMethod()) ? "COD" : PAYMENT_GATEWAY)
                 .idempotencyKey(idempotencyKey)
                 .idempotencyRequestHash(sha256(userId + "|" + idempotencyKey + "|" + req.getShippingAddress() + req.getPaymentMethod()))
                 .orderItems(items).build();
@@ -273,7 +289,10 @@ public class OrderService {
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorMessages.ORDER_NOT_FOUND));
         OrderStatus current = order.getStatus();
         boolean valid = switch (current) {
-            case PENDING -> target == OrderStatus.CANCELLED;
+            // Online orders leave PENDING only via the payment COMPLETED event; a COD order waits for
+            // merchant (admin) confirmation — the Shopee-style "chờ xác nhận" step.
+            case PENDING -> target == OrderStatus.CANCELLED
+                    || (target == OrderStatus.CONFIRMED && isCod(order.getPaymentMethod()));
             case CONFIRMED -> target == OrderStatus.SHIPPING || target == OrderStatus.CANCELLED;
             case SHIPPING -> target == OrderStatus.DELIVERED;
             default -> false;
@@ -286,6 +305,10 @@ public class OrderService {
         }
 
         switch (target) {
+            case CONFIRMED -> {
+                historyRepository.save(history(orderId, current, target, reason));
+                emitOutbox("OrderStatusChangedEvent", order, target, reason);
+            }
             case DELIVERED -> {
                 for (OrderItem item : orderItemRepository.findByOrderId(orderId)) {
                     inventoryService.deductReserved(item.getSku(), item.getQuantity(), "order:" + orderId);
@@ -330,6 +353,10 @@ public class OrderService {
     }
 
     private void refundQuietly(Order order) {
+        // COD orders have no payment transaction (payment_gateway='COD') — nothing to refund.
+        if (order.getPaymentTransactionId() == null) {
+            return;
+        }
         try {
             paymentClient.refund(order.getId(), order.getPaymentTransactionId());
         } catch (PaymentUnavailableException e) {
@@ -406,6 +433,20 @@ public class OrderService {
                 .shippingAddressSnapshot(order.getShippingAddressSnapshot()).paymentMethod(order.getPaymentMethod())
                 .paymentUrl(order.getPaymentUrl()).createdAt(order.getCreatedAt()).updatedAt(order.getUpdatedAt())
                 .items(items).build();
+    }
+
+    /** COD is stored as-is on the order (payment_method) and also in payment_gateway (column is NOT NULL). */
+    private static boolean isCod(String paymentMethod) {
+        return PAYMENT_METHOD_COD.equals(paymentMethod);
+    }
+
+    /** Whichever payment method a client sends, normalize to the two supported values before persisting. */
+    private static String normalizePaymentMethod(String pm) {
+        String normalized = pm == null ? "" : pm.trim().toUpperCase();
+        if (!PAYMENT_METHOD_COD.equals(normalized) && !PAYMENT_METHOD_VNPAY_QR.equals(normalized)) {
+            throw new IllegalArgumentException(ErrorMessages.PAYMENT_METHOD_UNSUPPORTED);
+        }
+        return normalized;
     }
 
     private void validateIdempotencyKey(String key) {

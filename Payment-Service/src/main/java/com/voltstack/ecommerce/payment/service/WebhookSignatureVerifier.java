@@ -1,5 +1,6 @@
 package com.voltstack.ecommerce.payment.service;
 
+import com.voltstack.ecommerce.payment.gateway.VnPayCrypto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -53,14 +54,24 @@ public class WebhookSignatureVerifier {
         if (provided == null || provided.isBlank()) {
             return false;
         }
+        if (VNPAY.equals(gateway)) {
+            // VNPay canonicalisation URL-encodes values; VnPayCrypto is shared with VnPayGateway so
+            // request signing and callback verification can never diverge (Techspec 2.1.0).
+            return VnPayCrypto.verify(secret, toStringMap(payload));
+        }
         String canonical = payload.entrySet().stream()
                 .filter(e -> !SIGNATURE_KEYS.contains(e.getKey()))
                 .sorted(Map.Entry.comparingByKey())
                 .map(e -> e.getKey() + "=" + e.getValue())
                 .collect(Collectors.joining("&"));
-        String algorithm = VNPAY.equals(gateway) ? "HmacSHA512" : "HmacSHA256";
-        String computed = hmac(algorithm, secret, canonical);
+        String computed = hmac("HmacSHA256", secret, canonical);
         return MessageDigest.isEqual(computed.getBytes(StandardCharsets.UTF_8), provided.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Map<String, String> toStringMap(Map<String, Object> payload) {
+        Map<String, String> out = new java.util.HashMap<>();
+        payload.forEach((k, v) -> out.put(k, v == null ? "" : v.toString()));
+        return out;
     }
 
     private String extractSignature(Map<String, Object> payload, String headerSignature) {

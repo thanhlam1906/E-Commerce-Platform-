@@ -31,7 +31,8 @@ public class SecurityConfig {
         "GET /api/v1/auth/verify-email",
         "POST /api/v1/auth/forgot-password",
         "POST /api/v1/auth/reset-password",
-        "POST /api/v1/payments/webhook/**"
+        "POST /api/v1/payments/webhook/**",
+        "GET /api/v1/payments/vnpay/return"
     };
 
     @Bean

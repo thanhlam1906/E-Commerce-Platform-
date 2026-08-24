@@ -1,6 +1,7 @@
 package com.voltstack.ecommerce.order.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.voltstack.ecommerce.order.entity.Order;
 import com.voltstack.ecommerce.order.entity.OrderItem;
 import com.voltstack.ecommerce.order.entity.OrderStatus;
 import com.voltstack.ecommerce.order.repository.ConsumedEventRepository;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -57,6 +59,8 @@ class KafkaEventConsumerTest {
     void completedEvent_transitionsToConfirmed_noStockRelease() {
         when(consumedEventRepository.existsById(eventId)).thenReturn(false);
         when(orderRepository.transition(orderId, "PENDING", "CONFIRMED")).thenReturn(1);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(
+                Order.builder().id(orderId).email("buyer@example.com").userId(UUID.randomUUID()).build()));
 
         consumer.onPaymentEvent(paymentEvent("COMPLETED"));
 
@@ -64,13 +68,17 @@ class KafkaEventConsumerTest {
         verify(inventoryService, never()).release(anyString(), anyInt(), anyString());
         verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CONFIRMED));
         verify(consumedEventRepository).save(argThat(c -> c.getEventId().equals(eventId) && "COMPLETED".equals(c.getEventType())));
-        verify(outboxRepository).save(argThat(e -> "OrderStatusChangedEvent".equals(e.getEventType())));
+        verify(outboxRepository).save(argThat(e -> "OrderStatusChangedEvent".equals(e.getEventType())
+                && e.getPayload().contains("\"email\":\"buyer@example.com\"")
+                && e.getPayload().contains("\"newStatus\":\"CONFIRMED\"")));
     }
 
     @Test
     void failedEvent_transitionsToCancelled_releasesStock() {
         when(consumedEventRepository.existsById(eventId)).thenReturn(false);
         when(orderRepository.transition(orderId, "PENDING", "CANCELLED")).thenReturn(1);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(
+                Order.builder().id(orderId).email("buyer@example.com").userId(UUID.randomUUID()).build()));
         when(orderItemRepository.findByOrderId(orderId)).thenReturn(List.of(OrderItem.builder().sku("SKU1").quantity(2).build()));
 
         consumer.onPaymentEvent(paymentEvent("FAILED"));
@@ -79,6 +87,28 @@ class KafkaEventConsumerTest {
         verify(inventoryService).release("SKU1", 2, "order:" + orderId);
         verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CANCELLED));
         verify(consumedEventRepository).save(argThat(c -> c.getEventId().equals(eventId) && "FAILED".equals(c.getEventType())));
+        verify(outboxRepository).save(argThat(e -> "OrderStatusChangedEvent".equals(e.getEventType())
+                && e.getPayload().contains("\"email\":\"buyer@example.com\"")
+                && e.getPayload().contains("\"newStatus\":\"CANCELLED\"")));
+    }
+
+    @Test
+    void timeoutEvent_transitionsToExpired_releasesStock() {
+        when(consumedEventRepository.existsById(eventId)).thenReturn(false);
+        when(orderRepository.transition(orderId, "PENDING", "EXPIRED")).thenReturn(1);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(
+                Order.builder().id(orderId).email("buyer@example.com").userId(UUID.randomUUID()).build()));
+        when(orderItemRepository.findByOrderId(orderId)).thenReturn(List.of(OrderItem.builder().sku("SKU1").quantity(2).build()));
+
+        consumer.onPaymentEvent(paymentEvent("TIMEOUT"));
+
+        verify(orderRepository).transition(orderId, "PENDING", "EXPIRED");
+        verify(inventoryService).release("SKU1", 2, "order:" + orderId);
+        verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.EXPIRED));
+        verify(consumedEventRepository).save(argThat(c -> c.getEventId().equals(eventId) && "TIMEOUT".equals(c.getEventType())));
+        verify(outboxRepository).save(argThat(e -> "OrderStatusChangedEvent".equals(e.getEventType())
+                && e.getPayload().contains("\"email\":\"buyer@example.com\"")
+                && e.getPayload().contains("\"newStatus\":\"EXPIRED\"")));
     }
 
     @Test
@@ -127,6 +157,8 @@ class KafkaEventConsumerTest {
     void paymentCompletedEvent_normalizesToCompleted() {
         when(consumedEventRepository.existsById(eventId)).thenReturn(false);
         when(orderRepository.transition(orderId, "PENDING", "CONFIRMED")).thenReturn(1);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(
+                Order.builder().id(orderId).email("buyer@example.com").userId(UUID.randomUUID()).build()));
 
         consumer.onPaymentEvent(paymentEvent("PaymentCompletedEvent"));
 
@@ -138,6 +170,8 @@ class KafkaEventConsumerTest {
     void paymentCompleted_snakeCase_normalizesToCompleted() {
         when(consumedEventRepository.existsById(eventId)).thenReturn(false);
         when(orderRepository.transition(orderId, "PENDING", "CONFIRMED")).thenReturn(1);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(
+                Order.builder().id(orderId).email("buyer@example.com").userId(UUID.randomUUID()).build()));
 
         consumer.onPaymentEvent(paymentEvent("payment_completed"));
 

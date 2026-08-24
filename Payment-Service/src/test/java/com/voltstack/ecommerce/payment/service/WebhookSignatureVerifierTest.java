@@ -1,5 +1,6 @@
 package com.voltstack.ecommerce.payment.service;
 
+import com.voltstack.ecommerce.payment.gateway.VnPayCrypto;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.Mac;
@@ -52,9 +53,40 @@ class WebhookSignatureVerifierTest {
     }
 
     @Test
-    void verify_validVnpaySignature_usesSha512() {
+    void verify_validVnpaySignature_usesSha512UrlEncoded() {
         WebhookSignatureVerifier verifier = new WebhookSignatureVerifier(VNPAY_SECRET, "", "", false);
-        assertTrue(verifier.verify("VNPAY", payloadWithSignature("VNPAY", VNPAY_SECRET), null));
+        // VNPay carries the signature as vnp_SecureHash over URL-encoded canonical params (shared VnPayCrypto).
+        Map<String, Object> payload = Map.of(
+                "gatewayTxnId", "SB-1",
+                "status", "SUCCESS",
+                "vnp_SecureHash", VnPayCrypto.sign(VNPAY_SECRET, Map.of("gatewayTxnId", "SB-1", "status", "SUCCESS")));
+        assertTrue(verifier.verify("VNPAY", payload, null));
+    }
+
+    /** A VNPay return callback built with the doc's Java hash (sorted params, HMAC-SHA512, URL-encoded
+     *  values — VnPayCrypto.canonicalize/sign) must verify, and a tampered vnp_Amount must be rejected. */
+    @Test
+    void vnpayReturnCallback_signedWithDocJavaHash_verifiesAndRejectsTamperedAmount() {
+        WebhookSignatureVerifier verifier = new WebhookSignatureVerifier(VNPAY_SECRET, "", "", false);
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("vnp_Amount", "2799000000");
+        params.put("vnp_BankCode", "NCB");
+        params.put("vnp_BankTranNo", "VNPAY0810");
+        params.put("vnp_CardType", "ATM");
+        params.put("vnp_OrderInfo", "Thanh toan don hang 82df99dc-60fb-4f20-b7b7-25cd9fc8054b");
+        params.put("vnp_PayDate", "20260823140000");
+        params.put("vnp_ResponseCode", "00");
+        params.put("vnp_TmnCode", "4HHH08ZK");
+        params.put("vnp_TransactionNo", "12345678");
+        params.put("vnp_TransactionStatus", "00");
+        params.put("vnp_TxnRef", "82df99dc-60fb-4f20-b7b7-25cd9fc8054b");
+        params.put("vnp_SecureHash", VnPayCrypto.sign(VNPAY_SECRET, params));
+
+        assertTrue(verifier.verify("VNPAY", new LinkedHashMap<>(params), null));
+
+        Map<String, String> tampered = new LinkedHashMap<>(params);
+        tampered.put("vnp_Amount", "2799000001"); // attacker rewrites the amount after signing
+        assertFalse(verifier.verify("VNPAY", new LinkedHashMap<>(tampered), null));
     }
 
     @Test

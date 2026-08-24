@@ -54,3 +54,6 @@ HELP.md
 
 # ====== Nested .git ======
 Product-Catalog-Service/.git/
+
+# Codegraph local index
+.codegraph/

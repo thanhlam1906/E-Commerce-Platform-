@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -94,6 +95,10 @@ class OrderServiceTest {
 
     private CreateOrderRequest orderRequest() {
         return CreateOrderRequest.builder().shippingAddress("123 Main St").paymentMethod("COD").build();
+    }
+
+    private CreateOrderRequest onlineRequest() {
+        return CreateOrderRequest.builder().shippingAddress("123 Main St").paymentMethod("VNPAY_QR").build();
     }
 
     private OrderItem item(String sku, int qty) {
@@ -192,9 +197,9 @@ class OrderServiceTest {
         when(orderRepository.findById(any(UUID.class))).thenAnswer(inv -> Optional.of(saved.get()));
 
         when(paymentClient.createPayment(any(), any(), any(), eq("VND"), any(), any(), any()))
-                .thenReturn(new PaymentClient.PaymentResult(UUID.randomUUID(), "http://pay/vnpay", Instant.now().plusSeconds(300)));
+                .thenReturn(new PaymentClient.PaymentResult(UUID.randomUUID(), "http://pay/vnpay", Instant.now().plusSeconds(300), null));
 
-        CheckoutResponse resp = orderService.createOrder(orderRequest(), "key-12345678");
+        CheckoutResponse resp = orderService.createOrder(onlineRequest(), "key-12345678");
 
         assertEquals("PENDING", resp.getStatus());
         assertEquals("OR-20260819-00001", resp.getOrderNumber());
@@ -239,7 +244,7 @@ class OrderServiceTest {
         when(paymentClient.createPayment(any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new PaymentUnavailableException("down"));
 
-        assertThrows(PaymentUnavailableException.class, () -> orderService.createOrder(orderRequest(), "key-12345678"));
+        assertThrows(PaymentUnavailableException.class, () -> orderService.createOrder(onlineRequest(), "key-12345678"));
 
         UUID orderId = saved.get().getId();
         verify(orderRepository).cancelIfActive(orderId);
@@ -351,5 +356,134 @@ class OrderServiceTest {
         assertThrows(InvalidOrderStateException.class,
                 () -> orderService.adminUpdateStatus(orderId, OrderStatus.DELIVERED, "test"));
         verify(orderRepository, never()).transition(any(), any(), any());
+    }
+
+    // ---- COD ----
+
+    @Test
+    void createOrder_cod_skipsPaymentClient_emitsOrderCreated_noPaymentUrl() {
+        setAuth();
+        when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
+        when(productClient.getSnapshot("SKU1"))
+                .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
+        when(orderNumberGenerator.generate(any())).thenReturn("OR-20260823-00001");
+        when(inventoryService.reserve(anyString(), anyInt(), anyString())).thenReturn(true);
+
+        AtomicReference<Order> saved = new AtomicReference<>();
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID()); // Hibernate assigns the id at persist
+            saved.set(o);
+            return o;
+        });
+        when(orderRepository.findById(any(UUID.class))).thenAnswer(inv -> Optional.of(saved.get()));
+
+        CheckoutResponse resp = orderService.createOrder(orderRequest(), "key-12345678");
+
+        assertEquals("PENDING", resp.getStatus());
+        assertNotNull(resp.getOrderId());
+        assertNull(resp.getPaymentUrl(), "COD order must not carry a payment URL");
+        assertNull(resp.getQrImage(), "COD order must not carry a QR image");
+        assertEquals("COD", saved.get().getPaymentMethod());
+        assertEquals("COD", saved.get().getPaymentGateway());
+        // No gateway transaction, no payment-info update, no QR.
+        verify(paymentClient, never()).createPayment(any(), any(), any(), any(), any(), any(), any());
+        verify(orderRepository, never()).updatePaymentInfo(any(), any(), any());
+        // OrderCreatedEvent still emitted (paymentUrl empty) so Notification sends the confirmation email.
+        verify(outboxRepository).save(argThat(e -> "OrderCreatedEvent".equals(e.getEventType())
+                && !e.getPublished() && saved.get().getId().toString().equals(e.getAggregateId())));
+        verify(cartService).removeItems(eq(null), any());
+        verify(cartService).releaseCheckoutLock(any());
+    }
+
+    @Test
+    void createOrder_unsupportedPaymentMethod_rejected() {
+        setAuth();
+        CreateOrderRequest req = CreateOrderRequest.builder().shippingAddress("123 Main St").paymentMethod("BTC").build();
+
+        assertThrows(IllegalArgumentException.class, () -> orderService.createOrder(req, "key-12345678"));
+        verify(cartService, never()).tryAcquireCheckoutLock(any());
+    }
+
+    @Test
+    void createOrder_codPaymentMethod_withSpaces_normalizesAndSkipsGateway() {
+        setAuth();
+        when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 1)));
+        when(productClient.getSnapshot("SKU1"))
+                .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
+        when(orderNumberGenerator.generate(any())).thenReturn("OR-20260823-00002");
+        when(inventoryService.reserve(anyString(), anyInt(), anyString())).thenReturn(true);
+
+        AtomicReference<Order> saved = new AtomicReference<>();
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID());
+            saved.set(o);
+            return o;
+        });
+        when(orderRepository.findById(any(UUID.class))).thenAnswer(inv -> Optional.of(saved.get()));
+
+        CreateOrderRequest req = CreateOrderRequest.builder().shippingAddress("123 Main St").paymentMethod("  cod  ").build();
+        CheckoutResponse resp = orderService.createOrder(req, "key-12345678");
+
+        assertEquals("COD", saved.get().getPaymentMethod());
+        assertNull(resp.getPaymentUrl());
+        verify(paymentClient, never()).createPayment(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void adminUpdateStatus_pendingToConfirmed_codAllowed_emitsStatusEvent() throws Exception {
+        setAuth();
+        UUID orderId = UUID.randomUUID();
+        orderRef(orderId, OrderStatus.PENDING); // orderRef builds a COD order (paymentMethod="COD")
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+
+        OrderResponse resp = orderService.adminUpdateStatus(orderId, OrderStatus.CONFIRMED, "merchant confirm");
+
+        assertEquals("CONFIRMED", resp.getStatus());
+        verify(outboxRepository).save(argThat(e -> "OrderStatusChangedEvent".equals(e.getEventType())));
+    }
+
+    @Test
+    void adminUpdateStatus_pendingToConfirmed_onlineOrderRejected() {
+        setAuth();
+        UUID orderId = UUID.randomUUID();
+        Order order = Order.builder().id(orderId).userId(userId).orderNumber("OR-1").status(OrderStatus.PENDING)
+                .totalAmount(new BigDecimal("200.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("VNPAY_QR").build();
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+
+        assertThrows(InvalidOrderStateException.class,
+                () -> orderService.adminUpdateStatus(orderId, OrderStatus.CONFIRMED, "test"));
+        verify(orderRepository, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void cancelConfirmedOrder_cod_skipsRefundButReleasesStock() throws Exception {
+        setAuth();
+        UUID orderId = UUID.randomUUID();
+        // COD order has no payment transaction id → nothing to refund.
+        Order order = Order.builder().id(orderId).userId(userId).orderNumber("OR-1").status(OrderStatus.CONFIRMED)
+                .totalAmount(new BigDecimal("200.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD").build();
+        AtomicReference<Order> ref = new AtomicReference<>(order);
+        when(orderRepository.findById(orderId)).thenAnswer(inv -> Optional.of(ref.get()));
+        when(orderRepository.cancelIfActive(orderId)).thenAnswer(inv -> {
+            ref.get().setStatus(OrderStatus.CANCELLED);
+            return 1;
+        });
+        when(orderItemRepository.findByOrderId(orderId)).thenReturn(List.of(item("SKU1", 2)));
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+
+        OrderResponse resp = orderService.cancelOrder(orderId);
+
+        assertEquals("CANCELLED", resp.getStatus());
+        verify(inventoryService).release("SKU1", 2, "order:" + orderId);
+        verify(paymentClient, never()).refund(any(), any());
+        verify(outboxRepository).save(argThat(e -> "OrderCancelledEvent".equals(e.getEventType())));
     }
 }

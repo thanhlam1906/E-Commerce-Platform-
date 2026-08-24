@@ -10,6 +10,8 @@ import com.voltstack.ecommerce.payment.exception.GatewayUnavailableException;
 import com.voltstack.ecommerce.payment.exception.InvalidPaymentStateException;
 import com.voltstack.ecommerce.payment.exception.ResourceNotFoundException;
 import com.voltstack.ecommerce.payment.exception.WebhookSignatureException;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.voltstack.ecommerce.payment.gateway.GatewayResult;
 import com.voltstack.ecommerce.payment.gateway.PaymentGateway;
 import com.voltstack.ecommerce.payment.repository.TransactionRepository;
@@ -22,8 +24,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -33,9 +37,10 @@ import java.util.UUID;
 public class PaymentService {
 
     private final TransactionRepository transactionRepository;
-    private final PaymentGateway gateway;
+    private final Map<String, PaymentGateway> gateways;
     private final WebhookSignatureVerifier signatureVerifier;
     private final PaymentEventPublisher eventPublisher;
+    private final ObjectMapper objectMapper;
 
     @Value("${payment.timeout-minutes:15}")
     private long timeoutMinutes;
@@ -50,10 +55,7 @@ public class PaymentService {
 
     public CreatePaymentResponse createPayment(CreatePaymentRequest req) {
         Gateway gatewayName = resolveGateway(req.getGateway());
-        if (!sandboxEnabled) {
-            // Sandbox is the only gateway impl today; with it disabled there is no selectable gateway.
-            throw new IllegalArgumentException("Cổng thanh toán không được hỗ trợ: " + req.getGateway());
-        }
+        PaymentGateway gateway = selectGateway(gatewayName);
         Instant now = Instant.now();
         Transaction txn = Transaction.builder()
                 .orderId(req.getOrderId()).userId(req.getUserId())
@@ -79,7 +81,7 @@ public class PaymentService {
         if (transactionRepository.updateGatewayInfo(txn.getId(), result.paymentUrl(), result.gatewayTxnId()) == 0) {
             log.warn("Payment {} already moved (timeout expired it) before gateway info was stored", txn.getId());
         }
-        return new CreatePaymentResponse(txn.getId(), result.paymentUrl(), now.plus(Duration.ofMinutes(timeoutMinutes)));
+        return new CreatePaymentResponse(txn.getId(), result.paymentUrl(), now.plus(Duration.ofMinutes(timeoutMinutes)), result.qrImage());
     }
 
     // ---- PAY-003: webhook (SRS §4) ----
@@ -99,6 +101,53 @@ public class PaymentService {
                 .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giao dịch với gateway_txn_id: " + gatewayTxnId));
         String status = stringField(payload, "status", "vnp_ResponseCode");
         applyResult(txn, status, rawBody);
+    }
+
+    /**
+     * VNPay IPN / return-URL notification (SRS §4). VNPay sends query params (not a JSON body) and the
+     * signature travels inside the query as {@code vnp_SecureHash}. Idempotent via the same rows==1 gate
+     * as JSON webhooks, so calling it from both the return URL and the IPN is safe.
+     */
+    @Transactional
+    public void handleVnPayNotify(Map<String, String> params) {
+        resolveGateway("VNPAY");
+        if (!signatureVerifier.verify("VNPAY", new HashMap<>(params), null)) {
+            throw new WebhookSignatureException("Chữ ký thông báo VNPay không hợp lệ");
+        }
+        String txnRef = params.get("vnp_TxnRef");
+        if (txnRef == null || txnRef.isBlank()) {
+            throw new IllegalArgumentException("Thiếu vnp_TxnRef trong thông báo VNPay");
+        }
+        Transaction txn = transactionRepository.findByGatewayTxnId(txnRef)
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giao dịch với vnp_TxnRef: " + txnRef));
+        // vnp_TransactionStatus is the authoritative payment state on IPN; vnp_ResponseCode is the
+        // processing result. Any non-00 value (24 = cancelled, 07/09/10/11/12/13 = failures) → FAILED.
+        String txnStatus = params.get("vnp_TransactionStatus");
+        boolean success = "00".equals(txnStatus)
+                || (txnStatus == null && "00".equals(params.get("vnp_ResponseCode")));
+        if (success && !amountMatches(txn, params.get("vnp_Amount"))) {
+            // VNPay charged a different amount than the order — never confirm; leave PENDING for
+            // the timeout to expire and log ERROR so reconciliation (PAY-006) can investigate.
+            throw new IllegalArgumentException("VNPay amount không khớp với đơn hàng");
+        }
+        applyResult(txn, success ? "SUCCESS" : "FAILED", toJson(params));
+    }
+
+    /** VNPay wire format encodes VND as whole units × 100 (VND has no decimals). */
+    private boolean amountMatches(Transaction txn, String paid) {
+        if (paid == null) {
+            return false;
+        }
+        long expected = txn.getAmount().multiply(BigDecimal.valueOf(100)).longValueExact();
+        return Long.toString(expected).equals(paid);
+    }
+
+    private String toJson(Map<String, String> params) {
+        try {
+            return objectMapper.writeValueAsString(params);
+        } catch (JsonProcessingException e) {
+            return "{}";
+        }
     }
 
     /** Sandbox simulator (dev tool): applies SUCCESS/FAILED directly, no signature required. */
@@ -173,6 +222,18 @@ public class PaymentService {
     }
 
     // ---- helpers ----
+
+    private PaymentGateway selectGateway(Gateway gatewayName) {
+        if (sandboxEnabled) {
+            // Dev flow: every gateway enum routes to the sandbox simulator (unchanged from before).
+            return gateways.get("SANDBOX");
+        }
+        PaymentGateway gateway = gateways.get(gatewayName.name());
+        if (gateway == null) {
+            throw new IllegalArgumentException("Cổng thanh toán không được hỗ trợ: " + gatewayName);
+        }
+        return gateway;
+    }
 
     private Gateway resolveGateway(String name) {
         try {

@@ -19,4 +19,6 @@ public class CheckoutResponse {
     private String status;
     private String paymentUrl;
     private BigDecimal totalAmount;
+    /** base64 PNG data URI of the NAPAS QR (VNPay), null for gateways without QR — render "quét mã QR" inline. */
+    private String qrImage;
 }

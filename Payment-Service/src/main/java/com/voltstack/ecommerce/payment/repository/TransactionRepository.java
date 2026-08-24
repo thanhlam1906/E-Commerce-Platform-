@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -24,8 +25,11 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     List<Transaction> findByStatusAndCreatedAtBefore(TransactionStatus status, Instant createdAt);
 
     /** Gateway createPayment succeeded: store the payment_url + gateway_txn_id. The status='PENDING' guard
-     *  makes it safe outside a method-level transaction: the timeout scheduler may have expired the row already. */
+     *  makes it safe outside a method-level transaction: the timeout scheduler may have expired the row already.
+     *  @Transactional is required: called from createPayment which deliberately has NO method-level tx
+     *  (gateway HTTP call must stay outside the DB transaction), so each modifying query runs its own short tx. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query(value = "UPDATE transactions SET payment_url = :paymentUrl, gateway_txn_id = :gatewayTxnId, updated_at = now() WHERE id = :id AND status = 'PENDING'", nativeQuery = true)
     int updateGatewayInfo(@Param("id") UUID id, @Param("paymentUrl") String paymentUrl, @Param("gatewayTxnId") String gatewayTxnId);
 
@@ -34,12 +38,13 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * transaction already moved (SUCCESS/FAILED/EXPIRED/REFUNDED) touches 0 rows → idempotent no-op.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = "UPDATE transactions SET status = :newStatus, gateway_txn_id = :gatewayTxnId, raw_webhook = :rawWebhook::jsonb, updated_at = now() WHERE id = :id AND status = 'PENDING'", nativeQuery = true)
+    @Query(value = "UPDATE transactions SET status = :newStatus, gateway_txn_id = :gatewayTxnId, raw_webhook = CAST(:rawWebhook AS jsonb), updated_at = now() WHERE id = :id AND status = 'PENDING'", nativeQuery = true)
     int applyWebhookResult(@Param("id") UUID id, @Param("gatewayTxnId") String gatewayTxnId,
                            @Param("rawWebhook") String rawWebhook, @Param("newStatus") String newStatus);
 
     /** Gateway createPayment failed → no orphan PENDING. Also used by the timeout scheduler. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query(value = "UPDATE transactions SET status = 'EXPIRED', updated_at = now() WHERE id = :id AND status = 'PENDING'", nativeQuery = true)
     int expireIfPending(@Param("id") UUID id);
 

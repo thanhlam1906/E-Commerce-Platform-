@@ -3,6 +3,7 @@ package com.voltstack.ecommerce.payment.security;
 import com.voltstack.ecommerce.payment.config.SecurityConfig;
 import com.voltstack.ecommerce.payment.controller.InternalPaymentController;
 import com.voltstack.ecommerce.payment.controller.PaymentHistoryController;
+import com.voltstack.ecommerce.payment.controller.VnPayController;
 import com.voltstack.ecommerce.payment.controller.WebhookController;
 import com.voltstack.ecommerce.payment.dto.CreatePaymentRequest;
 import com.voltstack.ecommerce.payment.dto.CreatePaymentResponse;
@@ -43,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * chain so HeaderAuthFilter/InternalTokenFilter run exactly once via SecurityConfig, and sets
  * servletPath explicitly because MockMvc leaves it empty while the filters key off it.
  */
-@WebMvcTest(controllers = {WebhookController.class, InternalPaymentController.class, PaymentHistoryController.class})
+@WebMvcTest(controllers = {WebhookController.class, InternalPaymentController.class, PaymentHistoryController.class, VnPayController.class})
 @Import(SecurityConfig.class)
 @TestPropertySource(properties = {"internal.service-token=test-token", "payment.sandbox.enabled=true"})
 class SecurityFilterTest {
@@ -104,7 +105,7 @@ class SecurityFilterTest {
     @Test
     void internalPayments_withCorrectToken_reachesController() throws Exception {
         when(paymentService.createPayment(any(CreatePaymentRequest.class)))
-                .thenReturn(new CreatePaymentResponse(UUID.randomUUID(), "http://pay.example/url", Instant.now()));
+                .thenReturn(new CreatePaymentResponse(UUID.randomUUID(), "http://pay.example/url", Instant.now(), null));
 
         mockMvc.perform(post("/internal/payments")
                         .with(servletPath("/internal/payments"))
@@ -183,6 +184,29 @@ class SecurityFilterTest {
                     assertNotEquals(401, status, "health should not require auth");
                     assertNotEquals(403, status, "health should not require auth");
                 });
+    }
+
+    // ---- VNPay IPN + return URL are public (server-to-server / browser redirect) ----
+
+    @Test
+    void vnpayReturn_withoutToken_isPublic() throws Exception {
+        mockMvc.perform(get("/api/v1/payments/vnpay/return")
+                        .with(servletPath("/api/v1/payments/vnpay/return"))
+                        .param("vnp_ResponseCode", "00")
+                        .param("vnp_SecureHash", "abc"))
+                .andExpect(status().isOk());
+
+        verify(paymentService).handleVnPayNotify(any());
+    }
+
+    @Test
+    void vnpayIpn_withoutToken_isPublic() throws Exception {
+        mockMvc.perform(get("/webhooks/vnpay/ipn")
+                        .with(servletPath("/webhooks/vnpay/ipn"))
+                        .param("vnp_TxnRef", "11111111-1111-1111-1111-111111111111"))
+                .andExpect(status().isOk());
+
+        verify(paymentService).handleVnPayNotify(any());
     }
 
     // ---- history requires the gateway-injected X-User-Id ----
