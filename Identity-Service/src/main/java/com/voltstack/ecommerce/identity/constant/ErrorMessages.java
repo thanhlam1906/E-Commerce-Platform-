@@ -13,6 +13,8 @@ public final class ErrorMessages {
     public static final String REFRESH_TOKEN_EXPIRED = "Refresh token đã hết hạn";
     public static final String TOKEN_REUSE_DETECTED = "Refresh token đã được sử dụng lại — vui lòng đăng nhập lại";
     public static final String UNAUTHENTICATED = "Chưa xác thực";
+    public static final String INVALID_VERIFICATION_TOKEN = "Token xác thực email không hợp lệ hoặc đã hết hạn";
+    public static final String INVALID_RESET_TOKEN = "Token đặt lại mật khẩu không hợp lệ hoặc đã hết hạn";
     public static final String VALIDATION_FAILED = "Dữ liệu không hợp lệ";
     public static final String INTERNAL_ERROR = "Lỗi hệ thống";
 }

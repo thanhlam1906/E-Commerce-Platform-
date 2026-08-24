@@ -35,7 +35,7 @@ class ApiGatewayApplicationTests {
             MockServerHttpRequest.get("/api/v1/orders").build());
 
         AtomicReference<ServerWebExchange> captured = new AtomicReference<>();
-        new ClaimsPropagationFilter()
+        new ClaimsPropagationFilter("test-secret")
             .filter(exchange, exc -> {
                 captured.set(exc);
                 return Mono.empty();
@@ -48,6 +48,8 @@ class ApiGatewayApplicationTests {
             .isEqualTo("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d");
         assertThat(captured.get().getRequest().getHeaders().getFirst("X-User-Roles"))
             .isEqualTo("CUSTOMER,ORDER_ADMIN");
+        assertThat(captured.get().getRequest().getHeaders().getFirst("X-Internal-Secret"))
+            .isEqualTo("test-secret");
     }
 
     @Test
@@ -56,7 +58,7 @@ class ApiGatewayApplicationTests {
             MockServerHttpRequest.get("/api/v1/products").build());
 
         AtomicReference<ServerWebExchange> captured = new AtomicReference<>();
-        new ClaimsPropagationFilter()
+        new ClaimsPropagationFilter("test-secret")
             .filter(exchange, exc -> {
                 captured.set(exc);
                 return Mono.empty();
@@ -65,5 +67,23 @@ class ApiGatewayApplicationTests {
 
         assertThat(captured.get().getRequest().getHeaders().getFirst("X-User-Id")).isEmpty();
         assertThat(captured.get().getRequest().getHeaders().getFirst("X-User-Roles")).isEmpty();
+        assertThat(captured.get().getRequest().getHeaders().getFirst("X-Internal-Secret"))
+            .isEqualTo("test-secret");
+    }
+
+    @Test
+    void doesNotInjectSecretWhenBlank() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+            MockServerHttpRequest.get("/api/v1/products").build());
+
+        AtomicReference<ServerWebExchange> captured = new AtomicReference<>();
+        new ClaimsPropagationFilter("")
+            .filter(exchange, exc -> {
+                captured.set(exc);
+                return Mono.empty();
+            })
+            .block();
+
+        assertThat(captured.get().getRequest().getHeaders().getFirst("X-Internal-Secret")).isNull();
     }
 }

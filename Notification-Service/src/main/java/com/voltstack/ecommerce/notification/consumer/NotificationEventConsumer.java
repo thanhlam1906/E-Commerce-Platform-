@@ -8,6 +8,8 @@ import com.voltstack.ecommerce.notification.domain.NotificationLog;
 import com.voltstack.ecommerce.notification.exception.MalformedEventException;
 import com.voltstack.ecommerce.notification.repository.NotificationLogRepository;
 import com.voltstack.ecommerce.notification.service.DeadLetterWriter;
+import com.voltstack.ecommerce.notification.service.EmailRenderer;
+import com.voltstack.ecommerce.notification.service.EmailSender;
 import com.voltstack.ecommerce.notification.service.NotificationQueue;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -16,6 +18,8 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -33,15 +37,21 @@ public class NotificationEventConsumer {
     private final NotificationLogRepository notificationLogRepository;
     private final NotificationQueue queue;
     private final DeadLetterWriter deadLetterWriter;
+    private final EmailRenderer emailRenderer;
+    private final EmailSender emailSender;
 
     public NotificationEventConsumer(ObjectMapper objectMapper,
                                      NotificationLogRepository notificationLogRepository,
                                      NotificationQueue queue,
-                                     DeadLetterWriter deadLetterWriter) {
+                                     DeadLetterWriter deadLetterWriter,
+                                     EmailRenderer emailRenderer,
+                                     EmailSender emailSender) {
         this.objectMapper = objectMapper;
         this.notificationLogRepository = notificationLogRepository;
         this.queue = queue;
         this.deadLetterWriter = deadLetterWriter;
+        this.emailRenderer = emailRenderer;
+        this.emailSender = emailSender;
     }
 
     @KafkaListener(topics = "#{'${notification.kafka.events-topic}'.split(',')}", groupId = "notification-service")
@@ -67,17 +77,26 @@ public class NotificationEventConsumer {
             Map<String, Object> payload = objectMapper.convertValue(data, new TypeReference<Map<String, Object>>() {});
             UUID userId = parseUuid(text(data, "userId", "user_id"));
 
-            NotificationLog entry = NotificationLog.builder()
+            // The raw one-time verify/reset token travels inside verifyLink/resetLink URLs; those
+            // links are needed to render the email but must never be persisted (SRS 07 §4), so the
+            // log row carries only a scrubbed defensive copy while the renderer gets the full map.
+            NotificationLog.NotificationLogBuilder builder = NotificationLog.builder()
                     .eventId(eventId)
                     .eventType(eventType)
                     .userId(userId)
                     .recipient(email.trim())
                     .channel("EMAIL")
                     .template(template)
-                    .payload(payload)
-                    .status("PENDING")
-                    .attempts(0)
-                    .build();
+                    .payload(scrubTokenFields(payload));
+            if (isTokenTemplate(template)) {
+                // Render + send now with the full payload, then persist only the scrubbed audit row.
+                EmailRenderer.RenderedEmail rendered = emailRenderer.render(template, payload);
+                String providerMsgId = emailSender.send(email.trim(), eventId.toString(), template, rendered);
+                builder.status("SENT").sentAt(Instant.now()).providerMsgId(providerMsgId).attempts(1);
+            } else {
+                builder.status("PENDING").attempts(0);
+            }
+            NotificationLog entry = builder.build();
             try {
                 notificationLogRepository.insert(entry);
             } catch (DuplicateKeyException e) {
@@ -85,12 +104,14 @@ public class NotificationEventConsumer {
                 ack.acknowledge();
                 return;
             }
-            try {
-                queue.enqueue(eventId, Instant.now());
-            } catch (RuntimeException e) {
-                // No durable job was scheduled; remove the dedup row so redelivery can retry cleanly.
-                notificationLogRepository.deleteByEventId(eventId);
-                throw e;
+            if (!"SENT".equals(entry.getStatus())) {
+                try {
+                    queue.enqueue(eventId, Instant.now());
+                } catch (RuntimeException e) {
+                    // No durable job was scheduled; remove the dedup row so redelivery can retry cleanly.
+                    notificationLogRepository.deleteByEventId(eventId);
+                    throw e;
+                }
             }
             ack.acknowledge();
         } catch (MalformedEventException | JsonProcessingException | IllegalArgumentException e) {
@@ -115,6 +136,31 @@ public class NotificationEventConsumer {
             case "PASSWORDRESETREQUESTED" -> "password-reset";
             default -> null;
         };
+    }
+
+    private boolean isTokenTemplate(String template) {
+        return "email-verification".equals(template) || "password-reset".equals(template);
+    }
+
+    /**
+     * Defensive copy of the payload minus token-bearing keys ({@code verifyLink}, {@code resetLink},
+     * or any key containing {@code token}, case-insensitive), recursing into nested maps. The caller
+     * keeps the original map untouched for rendering.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> scrubTokenFields(Map<String, Object> source) {
+        Map<String, Object> copy = new HashMap<>();
+        for (Map.Entry<String, Object> e : source.entrySet()) {
+            String key = e.getKey().toLowerCase(Locale.ROOT);
+            if (key.contains("token") || key.equals("verifylink") || key.equals("resetlink")) {
+                continue;
+            }
+            Object value = e.getValue();
+            copy.put(e.getKey(), value instanceof Map<?, ?> m
+                    ? scrubTokenFields((Map<String, Object>) m)
+                    : value);
+        }
+        return copy;
     }
 
     private String findEmail(JsonNode node, JsonNode data) {

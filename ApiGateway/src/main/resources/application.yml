@@ -111,3 +111,8 @@ gateway:
     enabled: ${GATEWAY_SECURITY_ENABLED:true}
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:5173}
+
+# Shared secret gateway→service identity proof (H1). Same value as Order/Payment
+# INTERNAL_SERVICE_TOKEN. Blank = not injected (local dev without config still works).
+internal:
+  service-token: ${INTERNAL_SERVICE_TOKEN:}

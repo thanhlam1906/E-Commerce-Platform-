@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.voltstack.ecommerce.notification.domain.NotificationLog;
 import com.voltstack.ecommerce.notification.repository.NotificationLogRepository;
 import com.voltstack.ecommerce.notification.service.DeadLetterWriter;
+import com.voltstack.ecommerce.notification.service.EmailRenderer;
+import com.voltstack.ecommerce.notification.service.EmailSender;
 import com.voltstack.ecommerce.notification.service.NotificationQueue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
@@ -28,6 +31,7 @@ class NotificationEventConsumerTest {
     private NotificationLogRepository logRepository;
     private NotificationQueue queue;
     private DeadLetterWriter deadLetterWriter;
+    private EmailSender emailSender;
     private Acknowledgment ack;
     private NotificationEventConsumer consumer;
 
@@ -36,8 +40,10 @@ class NotificationEventConsumerTest {
         logRepository = mock(NotificationLogRepository.class);
         queue = mock(NotificationQueue.class);
         deadLetterWriter = mock(DeadLetterWriter.class);
+        emailSender = mock(EmailSender.class);
         ack = mock(Acknowledgment.class);
-        consumer = new NotificationEventConsumer(new ObjectMapper(), logRepository, queue, deadLetterWriter);
+        consumer = new NotificationEventConsumer(new ObjectMapper(), logRepository, queue, deadLetterWriter,
+                new EmailRenderer(), emailSender);
         when(logRepository.insert(any(NotificationLog.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
@@ -119,5 +125,17 @@ class NotificationEventConsumerTest {
         assertEquals("order-cancelled", log.getTemplate());
         assertEquals("PENDING", log.getStatus());
         assertEquals(0, log.getAttempts());
+    }
+
+    @Test
+    void tokenKey_anyCase_strippedFromPersistedPayload() {
+        consumer.onEvent("{\"eventId\":\"" + UUID.randomUUID() + "\",\"eventType\":\"OrderCreatedEvent\","
+                + "\"email\":\"a@b.c\",\"resetToken\":\"raw\",\"orderNumber\":\"OR-1\"}", ack);
+        ArgumentCaptor<NotificationLog> captor = ArgumentCaptor.forClass(NotificationLog.class);
+        verify(logRepository).insert(captor.capture());
+        NotificationLog log = captor.getValue();
+        assertFalse(log.getPayload().containsKey("resetToken"));
+        assertFalse(log.getPayload().containsKey("reset_token"));
+        assertEquals("OR-1", log.getPayload().get("orderNumber"));
     }
 }

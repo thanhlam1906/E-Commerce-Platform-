@@ -30,7 +30,7 @@ public class SecurityConfig {
                         .requestMatchers("/internal/**").authenticated()
                         .anyRequest().authenticated())
                 .addFilterBefore(new InternalTokenFilter(internalToken), UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(new HeaderAuthFilter(), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new HeaderAuthFilter(internalToken), UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 }

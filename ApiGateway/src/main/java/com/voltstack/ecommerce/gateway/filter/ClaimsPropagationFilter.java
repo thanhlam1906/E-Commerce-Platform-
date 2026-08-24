@@ -1,5 +1,6 @@
 package com.voltstack.ecommerce.gateway.filter;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
@@ -23,6 +24,12 @@ import java.util.List;
 @Component
 public class ClaimsPropagationFilter implements WebFilter {
 
+    private final String internalSecret;
+
+    public ClaimsPropagationFilter(@Value("${internal.service-token:}") String internalSecret) {
+        this.internalSecret = internalSecret;
+    }
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
         return ReactiveSecurityContextHolder.getContext()
@@ -41,10 +48,12 @@ public class ClaimsPropagationFilter implements WebFilter {
             roles = roleList != null ? String.join(",", roleList) : "";
         }
 
-        ServerHttpRequest mutated = exchange.getRequest().mutate()
+        ServerHttpRequest.Builder builder = exchange.getRequest().mutate()
             .header("X-User-Id", userId != null ? userId : "")
-            .header("X-User-Roles", roles)
-            .build();
-        return exchange.mutate().request(mutated).build();
+            .header("X-User-Roles", roles);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            builder.header("X-Internal-Secret", internalSecret);
+        }
+        return exchange.mutate().request(builder.build()).build();
     }
 }

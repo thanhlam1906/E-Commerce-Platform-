@@ -45,25 +45,40 @@ class OutboxPublisherTest {
 
     @Test
     void publishPending_sendsAndMarksPublishedOnSuccess() {
-        OutboxEvent e1 = OutboxEvent.builder().id(UUID.randomUUID()).payload("{\"a\":1}").published(false).build();
-        OutboxEvent e2 = OutboxEvent.builder().id(UUID.randomUUID()).payload("{\"b\":2}").published(false).build();
+        OutboxEvent e1 = OutboxEvent.builder().id(UUID.randomUUID()).aggregateId("order-1")
+                .payload("{\"a\":1}").published(false).build();
+        OutboxEvent e2 = OutboxEvent.builder().id(UUID.randomUUID()).aggregateId("order-2")
+                .payload("{\"b\":2}").published(false).build();
         when(outboxRepository.findTop100ByPublishedFalseOrderByCreatedAt()).thenReturn(List.of(e1, e2));
-        when(kafkaTemplate.send("orders-topic", "{\"a\":1}")).thenReturn(okFuture());
-        when(kafkaTemplate.send("orders-topic", "{\"b\":2}")).thenReturn(okFuture());
+        when(kafkaTemplate.send("orders-topic", "order-1", "{\"a\":1}")).thenReturn(okFuture());
+        when(kafkaTemplate.send("orders-topic", "order-2", "{\"b\":2}")).thenReturn(okFuture());
 
         publisher.publishPending();
 
         assertTrue(e1.getPublished());
         assertTrue(e2.getPublished());
-        verify(kafkaTemplate, times(2)).send(anyString(), anyString());
+        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), anyString());
         verify(outboxRepository, times(2)).save(any(OutboxEvent.class));
     }
 
     @Test
+    void publishPending_usesAggregateIdAsKafkaKey() {
+        OutboxEvent e = OutboxEvent.builder().id(UUID.randomUUID()).aggregateId("order-123")
+                .payload("{}").published(false).build();
+        when(outboxRepository.findTop100ByPublishedFalseOrderByCreatedAt()).thenReturn(List.of(e));
+        when(kafkaTemplate.send("orders-topic", "order-123", "{}")).thenReturn(okFuture());
+
+        publisher.publishPending();
+
+        verify(kafkaTemplate).send("orders-topic", "order-123", "{}");
+    }
+
+    @Test
     void publishPending_sendFailure_keepsUnpublishedNoException() {
-        OutboxEvent e1 = OutboxEvent.builder().id(UUID.randomUUID()).payload("x").published(false).build();
+        OutboxEvent e1 = OutboxEvent.builder().id(UUID.randomUUID()).aggregateId("order-1")
+                .payload("x").published(false).build();
         when(outboxRepository.findTop100ByPublishedFalseOrderByCreatedAt()).thenReturn(List.of(e1));
-        when(kafkaTemplate.send(anyString(), anyString())).thenThrow(new RuntimeException("kafka down"));
+        when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenThrow(new RuntimeException("kafka down"));
 
         publisher.publishPending(); // must not propagate
 

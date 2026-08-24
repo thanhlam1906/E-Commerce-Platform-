@@ -13,6 +13,7 @@ public final class ErrorMessages {
     public static final String INVALID_ORDER_STATUS = "Trạng thái chuyển đổi không hợp lệ";
     public static final String INVALID_IDEMPOTENCY_KEY = "Idempotency-Key không hợp lệ";
     public static final String IDEMPOTENCY_KEY_EXPIRED = "Idempotency-Key đã dùng cho đơn bị hủy/hết hạn — dùng key mới";
+    public static final String IDEMPOTENCY_KEY_MISMATCH = "Idempotency-Key đã dùng với nội dung khác";
     public static final String CHECKOUT_IN_PROGRESS = "Đang có giao dịch thanh toán cho tài khoản này, vui lòng thử lại";
     public static final String INVALID_ITEM_QUANTITY = "Số lượng không hợp lệ";
     public static final String PAYMENT_METHOD_UNSUPPORTED = "Phương thức thanh toán không được hỗ trợ";

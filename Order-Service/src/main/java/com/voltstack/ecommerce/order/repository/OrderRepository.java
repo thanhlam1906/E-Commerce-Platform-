@@ -21,7 +21,8 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
 
     boolean existsByOrderNumber(String orderNumber);
 
-    List<Order> findByStatusAndCreatedAtBefore(OrderStatus status, java.time.Instant createdAt);
+    List<Order> findByStatusAndPaymentGatewayAndCreatedAtBefore(OrderStatus status, String paymentGateway,
+                                                                java.time.Instant createdAt);
 
     Page<Order> findByUserId(UUID userId, Pageable pageable);
 

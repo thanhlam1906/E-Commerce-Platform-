@@ -13,10 +13,12 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -47,6 +49,8 @@ class ProductClientTest {
         productClient = new ProductClient(redis, objectMapper);
         ReflectionTestUtils.setField(productClient, "productStub", stub);
         ReflectionTestUtils.setField(productClient, "cacheTtlMinutes", 60L);
+        // M3: every call goes through withDeadlineAfter, so the fluent stub must return itself.
+        when(stub.withDeadlineAfter(anyLong(), any())).thenReturn(stub);
     }
 
     @Test
@@ -61,6 +65,16 @@ class ProductClientTest {
         assertEquals("T-Shirt", snap.productName());
         assertEquals(new java.math.BigDecimal("100.00"), snap.unitPrice());
         verify(valueOps).set(eq("product:snapshot:SKU1"), eq("{}"), any(Duration.class));
+    }
+
+    @Test
+    void getSnapshot_setsGrpcDeadline() {
+        VerifySkuResponse resp = VerifySkuResponse.newBuilder().setExists(true).setSnapshot(GRPC_SNAP).build();
+        when(stub.verifySku(any(SkuRequest.class))).thenReturn(resp);
+
+        productClient.getSnapshot("SKU1");
+
+        verify(stub).withDeadlineAfter(5, TimeUnit.SECONDS);
     }
 
     @Test

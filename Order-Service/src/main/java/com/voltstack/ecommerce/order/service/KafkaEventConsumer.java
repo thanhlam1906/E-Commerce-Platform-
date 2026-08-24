@@ -103,6 +103,7 @@ public class KafkaEventConsumer {
             payload.put("eventId", UUID.randomUUID().toString());
             payload.put("eventType", "OrderStatusChangedEvent");
             payload.put("orderId", orderId.toString());
+            payload.put("orderNumber", order.getOrderNumber());
             payload.put("email", order.getEmail());
             payload.put("userId", order.getUserId().toString());
             // transition() already ran, so order.getStatus() is the new status — old is always PENDING.

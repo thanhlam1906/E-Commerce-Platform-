@@ -31,7 +31,8 @@ public class OutboxPublisher {
         List<OutboxEvent> events = outboxRepository.findTop100ByPublishedFalseOrderByCreatedAt();
         for (OutboxEvent event : events) {
             try {
-                kafkaTemplate.send(topic, event.getPayload()).get(5, TimeUnit.SECONDS);
+                // M4: key by aggregateId (orderId/sku) so Kafka preserves per-aggregate ordering.
+                kafkaTemplate.send(topic, event.getAggregateId(), event.getPayload()).get(5, TimeUnit.SECONDS);
                 // One short transaction per event so a slow/broken broker never holds a single
                 // DB connection for the whole batch. A send-then-rollback resends (at-least-once);
                 // consumers dedup.

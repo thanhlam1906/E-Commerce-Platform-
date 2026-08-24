@@ -60,7 +60,7 @@ class KafkaEventConsumerTest {
         when(consumedEventRepository.existsById(eventId)).thenReturn(false);
         when(orderRepository.transition(orderId, "PENDING", "CONFIRMED")).thenReturn(1);
         when(orderRepository.findById(orderId)).thenReturn(Optional.of(
-                Order.builder().id(orderId).email("buyer@example.com").userId(UUID.randomUUID()).build()));
+                Order.builder().id(orderId).orderNumber("OR-1").email("buyer@example.com").userId(UUID.randomUUID()).build()));
 
         consumer.onPaymentEvent(paymentEvent("COMPLETED"));
 
@@ -68,7 +68,9 @@ class KafkaEventConsumerTest {
         verify(inventoryService, never()).release(anyString(), anyInt(), anyString());
         verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CONFIRMED));
         verify(consumedEventRepository).save(argThat(c -> c.getEventId().equals(eventId) && "COMPLETED".equals(c.getEventType())));
+        // M9: payload aligned with OrderService.emitOutbox — must carry orderNumber for Notification.
         verify(outboxRepository).save(argThat(e -> "OrderStatusChangedEvent".equals(e.getEventType())
+                && e.getPayload().contains("\"orderNumber\":\"OR-1\"")
                 && e.getPayload().contains("\"email\":\"buyer@example.com\"")
                 && e.getPayload().contains("\"newStatus\":\"CONFIRMED\"")));
     }

@@ -12,6 +12,7 @@ import com.voltstack.ecommerce.order.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -30,6 +31,10 @@ public class CartService {
     private static final String PREFIX_GUEST = "cart:guest:";
     private static final String PREFIX_CHECKOUT = "cart:checkout:";
     private static final Duration CHECKOUT_LOCK_TTL = Duration.ofSeconds(30);
+    /** Compare-and-delete checkout lock: only the owner whose token still matches may release. */
+    private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            Long.class);
 
     private final StringRedisTemplate redis;
     private final ProductClient productClient;
@@ -91,13 +96,21 @@ public class CartService {
     /**
      * Serialize checkout per user so two concurrent POST /orders cannot both read the same
      * cart, double-reserve stock and double-charge. TTL guards against a crash mid-checkout.
+     * Returns a fresh token (the lock value) so release can verify ownership.
      */
-    public boolean tryAcquireCheckoutLock(UUID userId) {
-        return Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(PREFIX_CHECKOUT + userId, "1", CHECKOUT_LOCK_TTL));
+    public String tryAcquireCheckoutLock(UUID userId) {
+        String token = UUID.randomUUID().toString();
+        Boolean ok = redis.opsForValue().setIfAbsent(PREFIX_CHECKOUT + userId, token, CHECKOUT_LOCK_TTL);
+        return Boolean.TRUE.equals(ok) ? token : null;
     }
 
-    public void releaseCheckoutLock(UUID userId) {
-        redis.delete(PREFIX_CHECKOUT + userId);
+    /** Compare-and-delete: only the owner whose token still matches may release, so a slow
+     *  checkout whose TTL expired can never delete the next request's lock. */
+    public void releaseCheckoutLock(UUID userId, String token) {
+        if (token == null) {
+            return;
+        }
+        redis.execute(RELEASE_LOCK_SCRIPT, List.of(PREFIX_CHECKOUT + userId), token);
     }
 
     /** Remove only the ordered SKUs after checkout — items added mid-payment survive. */

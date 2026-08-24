@@ -65,7 +65,8 @@ public class PaymentEventPublisher {
             envelope.putAll(body);
             outboxRepository.save(OutboxEvent.builder()
                     .eventType(eventType)
-                    .aggregateId(txn.getId().toString())
+                    // Key by orderId to match Order-side M4 (aggregateId = orderId → per-order partition ordering).
+                    .aggregateId(txn.getOrderId().toString())
                     .payload(objectMapper.writeValueAsString(envelope))
                     .published(false)
                     .build());

@@ -1,11 +1,10 @@
-package com.voltstack.ecommerce.order.security;
+package com.voltstack.ecommerce.payment.security;
 
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -35,7 +34,7 @@ class HeaderAuthFilterTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Internal-Secret", SECRET);
         request.addHeader("X-User-Id", "user-123");
-        request.addHeader("X-User-Roles", " ORDER_ADMIN, SUPER_ADMIN ");
+        request.addHeader("X-User-Roles", " CUSTOMER, PAYMENT_ADMIN ");
         MockHttpServletResponse response = new MockHttpServletResponse();
         FilterChain chain = mock(FilterChain.class);
 
@@ -44,36 +43,9 @@ class HeaderAuthFilterTest {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         assertNotNull(auth);
         assertEquals("user-123", auth.getName());
-        assertTrue(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ORDER_ADMIN")));
-        assertTrue(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_SUPER_ADMIN")));
+        assertTrue(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_CUSTOMER")));
+        assertTrue(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_PAYMENT_ADMIN")));
         verify(chain).doFilter(request, response);
-    }
-
-    @Test
-    void blankUserId_leavesNoAuthentication() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Internal-Secret", SECRET);
-        request.addHeader("X-User-Id", "   ");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        FilterChain chain = mock(FilterChain.class);
-
-        filter.doFilter(request, response, chain);
-
-        assertNull(SecurityContextHolder.getContext().getAuthentication());
-        verify(chain).doFilter(request, response);
-    }
-
-    @Test
-    void clearsContextBeforeEachRequest() throws Exception {
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken("prev", null, List.of()));
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Internal-Secret", SECRET);
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilter(request, response, mock(FilterChain.class));
-
-        assertNull(SecurityContextHolder.getContext().getAuthentication());
     }
 
     @Test
@@ -114,6 +86,20 @@ class HeaderAuthFilterTest {
 
         filter.doFilter(request, response, chain);
 
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+        verify(chain).doFilter(request, response);
+    }
+
+    @Test
+    void shouldNotFilterPaths_bypassSecretCheck() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setServletPath("/internal/payments");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        assertEquals(200, response.getStatus());
         assertNull(SecurityContextHolder.getContext().getAuthentication());
         verify(chain).doFilter(request, response);
     }

@@ -11,6 +11,7 @@ import com.voltstack.ecommerce.order.entity.Order;
 import com.voltstack.ecommerce.order.entity.OrderItem;
 import com.voltstack.ecommerce.order.entity.OrderStatus;
 import com.voltstack.ecommerce.order.entity.OutboxEvent;
+import com.voltstack.ecommerce.order.exception.DuplicateResourceException;
 import com.voltstack.ecommerce.order.exception.InvalidOrderStateException;
 import com.voltstack.ecommerce.order.exception.PaymentUnavailableException;
 import com.voltstack.ecommerce.order.exception.ResourceNotFoundException;
@@ -44,6 +45,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -94,7 +96,8 @@ class OrderServiceTest {
     }
 
     private CreateOrderRequest orderRequest() {
-        return CreateOrderRequest.builder().shippingAddress("123 Main St").paymentMethod("COD").build();
+        return CreateOrderRequest.builder().shippingAddress("123 Main St").paymentMethod("COD")
+                .email("user@example.com").build();
     }
 
     private CreateOrderRequest onlineRequest() {
@@ -144,17 +147,17 @@ class OrderServiceTest {
     void createOrder_emptyCart_throws() {
         setAuth();
         when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
-        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
         when(cartService.readRawCart(null)).thenReturn(List.of());
         assertThrows(IllegalArgumentException.class, () -> orderService.createOrder(orderRequest(), "key-12345678"));
-        verify(cartService).releaseCheckoutLock(any());
+        verify(cartService).releaseCheckoutLock(any(), any());
     }
 
     @Test
     void createOrder_checkoutLockBusy_throws() {
         setAuth();
         when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
-        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(false);
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(null);
 
         assertThrows(IllegalStateException.class, () -> orderService.createOrder(orderRequest(), "key-12345678"));
         verify(cartService, never()).readRawCart(any());
@@ -180,7 +183,7 @@ class OrderServiceTest {
     void createOrder_happyPath_reservesSavesPaysAndRemovesOrderedSkus() {
         setAuth();
         when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
-        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
         when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
         when(productClient.getSnapshot("SKU1"))
                 .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
@@ -218,14 +221,14 @@ class OrderServiceTest {
         verify(orderRepository).updatePaymentInfo(any(), eq("http://pay/vnpay"), any());
         verify(cartService).removeItems(eq(null), any());
         verify(cartService, never()).clearCart(any());
-        verify(cartService).releaseCheckoutLock(any());
+        verify(cartService).releaseCheckoutLock(any(), any());
     }
 
     @Test
     void createOrder_paymentFailure_compensatesAndRethrows() {
         setAuth();
         when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
-        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
         when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
         when(productClient.getSnapshot("SKU1"))
                 .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
@@ -250,6 +253,241 @@ class OrderServiceTest {
         verify(orderRepository).cancelIfActive(orderId);
         verify(inventoryService).release("SKU1", 2, "order:" + orderId);
         verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CANCELLED));
+    }
+
+    // ---- M1 idempotency payload compare ----
+
+    @Test
+    void createOrder_sameKeyDifferentPayload_rejectsWith409() {
+        setAuth();
+        String key = "key-12345678";
+        CreateOrderRequest otherReq = CreateOrderRequest.builder()
+                .shippingAddress("999 Other St").paymentMethod("COD").email("user@example.com").build();
+        Order existing = Order.builder().id(UUID.randomUUID()).userId(userId).orderNumber("OR-EXISTING")
+                .status(OrderStatus.PENDING).totalAmount(new BigDecimal("50.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD")
+                .idempotencyRequestHash(idemHash(userId, key, List.of(new CartService.CartItem("SKU1", 2)), otherReq))
+                .build();
+        when(orderRepository.findByUserIdAndIdempotencyKey(userId, key)).thenReturn(Optional.of(existing));
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
+
+        assertThrows(DuplicateResourceException.class, () -> orderService.createOrder(orderRequest(), key));
+        verify(orderRepository, never()).save(any(Order.class));
+        verify(cartService, never()).tryAcquireCheckoutLock(any());
+    }
+
+    @Test
+    void createOrder_sameKeySameCartSamePayload_returnsExistingOrder() {
+        setAuth();
+        String key = "key-12345678";
+        Order existing = Order.builder().id(UUID.randomUUID()).userId(userId).orderNumber("OR-EXISTING")
+                .status(OrderStatus.PENDING).totalAmount(new BigDecimal("50.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD")
+                .idempotencyRequestHash(idemHash(userId, key, List.of(new CartService.CartItem("SKU1", 2)), orderRequest()))
+                .build();
+        when(orderRepository.findByUserIdAndIdempotencyKey(userId, key)).thenReturn(Optional.of(existing));
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
+
+        CheckoutResponse resp = orderService.createOrder(orderRequest(), key);
+
+        assertEquals(existing.getId(), resp.getOrderId());
+        verify(cartService, never()).tryAcquireCheckoutLock(any());
+    }
+
+    @Test
+    void createOrder_sameKeyDifferentCart_rejectsWith409() {
+        setAuth();
+        String key = "key-12345678";
+        // Order was placed with SKU1:2; the client then changed the cart to SKU2:3 and reuses the key.
+        Order existing = Order.builder().id(UUID.randomUUID()).userId(userId).orderNumber("OR-EXISTING")
+                .status(OrderStatus.PENDING).totalAmount(new BigDecimal("50.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD")
+                .idempotencyRequestHash(idemHash(userId, key, List.of(new CartService.CartItem("SKU1", 2)), orderRequest()))
+                .build();
+        when(orderRepository.findByUserIdAndIdempotencyKey(userId, key)).thenReturn(Optional.of(existing));
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU2", 3)));
+
+        assertThrows(DuplicateResourceException.class, () -> orderService.createOrder(orderRequest(), key));
+        verify(orderRepository, never()).save(any(Order.class));
+        verify(cartService, never()).tryAcquireCheckoutLock(any());
+    }
+
+    @Test
+    void createOrder_sameKeyEmptyCart_returnsExistingOrder() {
+        setAuth();
+        String key = "key-12345678";
+        // The original checkout committed and cleared the cart; a response-lost retry hits an empty cart.
+        Order existing = Order.builder().id(UUID.randomUUID()).userId(userId).orderNumber("OR-EXISTING")
+                .status(OrderStatus.PENDING).totalAmount(new BigDecimal("50.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD")
+                .idempotencyRequestHash(idemHash(userId, key, List.of(new CartService.CartItem("SKU1", 2)), orderRequest()))
+                .build();
+        when(orderRepository.findByUserIdAndIdempotencyKey(userId, key)).thenReturn(Optional.of(existing));
+        when(cartService.readRawCart(null)).thenReturn(List.of());
+
+        CheckoutResponse resp = orderService.createOrder(orderRequest(), key);
+
+        assertEquals(existing.getId(), resp.getOrderId());
+        verify(cartService, never()).tryAcquireCheckoutLock(any());
+    }
+
+    // ---- M5 completePaymentTx compensation ----
+
+    @Test
+    void createOrder_completePaymentTxFails_compensatesAndRethrows() {
+        setAuth();
+        when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
+        when(productClient.getSnapshot("SKU1"))
+                .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
+        when(orderNumberGenerator.generate(any())).thenReturn("OR-20260823-00003");
+        when(inventoryService.reserve(anyString(), anyInt(), anyString())).thenReturn(true);
+
+        AtomicReference<Order> saved = new AtomicReference<>();
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID());
+            saved.set(o);
+            return o;
+        });
+        when(paymentClient.createPayment(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PaymentClient.PaymentResult(UUID.randomUUID(), "http://pay/vnpay",
+                        Instant.now().plusSeconds(300), null));
+        when(orderRepository.updatePaymentInfo(any(), any(), any()))
+                .thenThrow(new RuntimeException("outbox db down"));
+        when(orderRepository.cancelIfActive(any(UUID.class))).thenReturn(1);
+        when(orderItemRepository.findByOrderId(any(UUID.class))).thenReturn(List.of(item("SKU1", 2)));
+
+        assertThrows(RuntimeException.class, () -> orderService.createOrder(onlineRequest(), "key-12345678"));
+
+        UUID orderId = saved.get().getId();
+        verify(orderRepository).cancelIfActive(orderId);
+        verify(inventoryService).release("SKU1", 2, "order:" + orderId);
+        verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CANCELLED
+                && h.getOrderId().equals(orderId)));
+        verify(cartService).releaseCheckoutLock(any(), any());
+    }
+
+    // ---- M7 post-commit failure must not break a committed order ----
+
+    @Test
+    void createOrder_removeItemsFails_stillReturnsCommittedOrder() {
+        setAuth();
+        when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
+        when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
+        when(productClient.getSnapshot("SKU1"))
+                .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
+        when(orderNumberGenerator.generate(any())).thenReturn("OR-20260823-00004");
+        when(inventoryService.reserve(anyString(), anyInt(), anyString())).thenReturn(true);
+
+        AtomicReference<Order> saved = new AtomicReference<>();
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID());
+            saved.set(o);
+            return o;
+        });
+        when(orderRepository.findById(any(UUID.class))).thenAnswer(inv -> Optional.of(saved.get()));
+        doThrow(new RuntimeException("redis down")).when(cartService).removeItems(eq(null), any());
+
+        CheckoutResponse resp = orderService.createOrder(orderRequest(), "key-12345678");
+
+        assertEquals(saved.get().getId(), resp.getOrderId());
+        assertEquals("PENDING", resp.getStatus());
+        // The committed order is returned despite the cart cleanup failure, and the lock still releases.
+        verify(cartService).releaseCheckoutLock(any(), any());
+    }
+
+    // ---- COD timeout scheduler path ----
+
+    @Test
+    void expireCodPending_codPending_releasesStockEmitsCancelledEvent() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        Order order = Order.builder().id(orderId).userId(userId).orderNumber("OR-1").status(OrderStatus.PENDING)
+                .totalAmount(new BigDecimal("200.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD").paymentGateway("COD").build();
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+        when(orderRepository.transition(orderId, "PENDING", "CANCELLED")).thenReturn(1);
+        when(orderItemRepository.findByOrderId(orderId)).thenReturn(List.of(item("SKU1", 2)));
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+
+        int rows = orderService.expireCodPending(orderId);
+
+        assertEquals(1, rows);
+        verify(inventoryService).release("SKU1", 2, "order:" + orderId);
+        verify(historyRepository).save(argThat(h -> h.getNewStatus() == OrderStatus.CANCELLED
+                && h.getOrderId().equals(orderId)));
+        verify(outboxRepository).save(argThat(e -> "OrderCancelledEvent".equals(e.getEventType())
+                && !e.getPublished()));
+    }
+
+    @Test
+    void expireCodPending_alreadyNotPending_noOp() {
+        UUID orderId = UUID.randomUUID();
+        Order order = Order.builder().id(orderId).userId(userId).orderNumber("OR-1").status(OrderStatus.CANCELLED)
+                .totalAmount(new BigDecimal("200.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD").paymentGateway("COD").build();
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+
+        int rows = orderService.expireCodPending(orderId);
+
+        assertEquals(0, rows);
+        verify(orderRepository, never()).transition(any(), any(), any());
+        verify(inventoryService, never()).release(anyString(), anyInt(), anyString());
+        verify(outboxRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void expireCodPending_onlinePending_notTouched() {
+        UUID orderId = UUID.randomUUID();
+        // Online (VNPAY) PENDING — Payment-Service owns the TIMEOUT clock, this must not cancel it.
+        Order order = Order.builder().id(orderId).userId(userId).orderNumber("OR-1").status(OrderStatus.PENDING)
+                .totalAmount(new BigDecimal("200.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("VNPAY_QR").paymentGateway("VNPAY").build();
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+
+        int rows = orderService.expireCodPending(orderId);
+
+        assertEquals(0, rows);
+        verify(orderRepository, never()).transition(any(), any(), any());
+        verify(inventoryService, never()).release(anyString(), anyInt(), anyString());
+    }
+
+    @Test
+    void expireCodPending_transitionLost_noDoubleRelease() {
+        UUID orderId = UUID.randomUUID();
+        Order order = Order.builder().id(orderId).userId(userId).orderNumber("OR-1").status(OrderStatus.PENDING)
+                .totalAmount(new BigDecimal("200.00")).currency("VND")
+                .shippingAddressSnapshot("addr").paymentMethod("COD").paymentGateway("COD").build();
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+        when(orderRepository.transition(orderId, "PENDING", "CANCELLED")).thenReturn(0); // admin won the race
+
+        int rows = orderService.expireCodPending(orderId);
+
+        assertEquals(0, rows);
+        verify(inventoryService, never()).release(anyString(), anyInt(), anyString());
+        verify(outboxRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    private String sha256(String input) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Mirrors OrderService.idempotencyHash: canonical sorted sku:qty cart + request payload. */
+    private String idemHash(UUID userId, String key, List<CartService.CartItem> cart, CreateOrderRequest req) {
+        String cartPart = cart.stream()
+                .sorted(java.util.Comparator.comparing(CartService.CartItem::sku))
+                .map(c -> c.sku() + ":" + c.quantity())
+                .collect(java.util.stream.Collectors.joining(","));
+        return sha256(userId + "|" + key + "|" + cartPart + "|" + req.getEmail()
+                + "|" + req.getShippingAddress() + "|" + req.getPaymentMethod());
     }
 
     // ---- cancelOrder ----
@@ -364,7 +602,7 @@ class OrderServiceTest {
     void createOrder_cod_skipsPaymentClient_emitsOrderCreated_noPaymentUrl() {
         setAuth();
         when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
-        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
         when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 2)));
         when(productClient.getSnapshot("SKU1"))
                 .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));
@@ -395,7 +633,7 @@ class OrderServiceTest {
         verify(outboxRepository).save(argThat(e -> "OrderCreatedEvent".equals(e.getEventType())
                 && !e.getPublished() && saved.get().getId().toString().equals(e.getAggregateId())));
         verify(cartService).removeItems(eq(null), any());
-        verify(cartService).releaseCheckoutLock(any());
+        verify(cartService).releaseCheckoutLock(any(), any());
     }
 
     @Test
@@ -411,7 +649,7 @@ class OrderServiceTest {
     void createOrder_codPaymentMethod_withSpaces_normalizesAndSkipsGateway() {
         setAuth();
         when(orderRepository.findByUserIdAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
-        when(cartService.tryAcquireCheckoutLock(any())).thenReturn(true);
+        when(cartService.tryAcquireCheckoutLock(any())).thenReturn("lock-token");
         when(cartService.readRawCart(null)).thenReturn(List.of(new CartService.CartItem("SKU1", 1)));
         when(productClient.getSnapshot("SKU1"))
                 .thenReturn(new ProductSnapshot("SKU1", "T-Shirt", "Black/M", "100.00"));

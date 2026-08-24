@@ -1,36 +1,53 @@
 package com.voltstack.ecommerce.identity.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.voltstack.ecommerce.identity.dto.request.ForgotPasswordRequest;
 import com.voltstack.ecommerce.identity.dto.request.LoginRequest;
 import com.voltstack.ecommerce.identity.dto.request.RefreshRequest;
 import com.voltstack.ecommerce.identity.dto.request.RegisterRequest;
+import com.voltstack.ecommerce.identity.dto.request.ResetPasswordRequest;
+import com.voltstack.ecommerce.identity.dto.request.VerifyEmailRequest;
 import com.voltstack.ecommerce.identity.dto.response.AuthResponse;
 import com.voltstack.ecommerce.identity.exception.DuplicateResourceException;
 import com.voltstack.ecommerce.identity.exception.InvalidCredentialsException;
 import com.voltstack.ecommerce.identity.exception.TokenReuseException;
 import com.voltstack.ecommerce.identity.model.RefreshToken;
 import com.voltstack.ecommerce.identity.model.User;
+import com.voltstack.ecommerce.identity.model.VerificationToken;
 import com.voltstack.ecommerce.identity.model.enums.Role;
+import com.voltstack.ecommerce.identity.model.enums.VerificationPurpose;
 import com.voltstack.ecommerce.identity.repository.RefreshTokenRepository;
 import com.voltstack.ecommerce.identity.repository.UserRepository;
+import com.voltstack.ecommerce.identity.repository.VerificationTokenRepository;
 import com.voltstack.ecommerce.identity.security.JwtService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,12 +60,25 @@ class AuthServiceTest {
     @Mock
     private RefreshTokenRepository refreshTokenRepository;
     @Mock
+    private VerificationTokenRepository verificationTokenRepository;
+    @Mock
     private PasswordEncoder passwordEncoder;
     @Mock
     private JwtService jwtService;
+    @Mock
+    private KafkaTemplate<String, String> kafkaTemplate;
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private AuthService authService;
+
+    @BeforeEach
+    void stubKafkaSend() {
+        lenient().when(kafkaTemplate.send(any(), anyString()))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        ReflectionTestUtils.setField(authService, "frontendBaseUrl", "http://localhost:3000");
+    }
 
     private User user() {
         return User.builder()
@@ -60,13 +90,31 @@ class AuthServiceTest {
                 .build();
     }
 
+    private VerificationToken emailVerifyToken(UUID userId, Instant expiresAt) {
+        return VerificationToken.builder()
+                .userId(userId)
+                .tokenHash("hash")
+                .purpose(VerificationPurpose.EMAIL_VERIFY)
+                .expiresAt(expiresAt)
+                .build();
+    }
+
     @Test
-    void register_createsCustomerAndReturnsTokens() {
+    void register_createsCustomerAndReturnsTokens() throws Exception {
         when(userRepository.existsByEmail("a@b.com")).thenReturn(false);
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            // JPA GenerationType.UUID gán id ngay khi save; mock cần mô phỏng hành vi này
+            User u = inv.getArgument(0);
+            if (u.getId() == null) {
+                u.setId(UUID.randomUUID());
+            }
+            return u;
+        });
         when(passwordEncoder.encode("password123")).thenReturn("hashed");
         when(jwtService.generateAccessToken(any(User.class))).thenReturn("access");
         when(jwtService.generateRefreshToken()).thenReturn("raw-refresh");
         when(jwtService.hashToken("raw-refresh")).thenReturn("hash-refresh");
+        when(verificationTokenRepository.findByUserIdAndPurposeAndUsedAtIsNull(any(), any())).thenReturn(List.of());
 
         RegisterRequest req = RegisterRequest.builder()
                 .email("a@b.com").password("password123").fullName("A").build();
@@ -77,6 +125,20 @@ class AuthServiceTest {
         assertEquals("raw-refresh", res.getRefreshToken());
         assertEquals(Role.CUSTOMER, res.getUser().getRole());
         verify(passwordEncoder).encode("password123");
+
+        // register tạo email-verify token + publish UserRegisteredEvent
+        ArgumentCaptor<VerificationToken> tokenCaptor = ArgumentCaptor.forClass(VerificationToken.class);
+        verify(verificationTokenRepository).save(tokenCaptor.capture());
+        assertEquals(VerificationPurpose.EMAIL_VERIFY, tokenCaptor.getValue().getPurpose());
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(kafkaTemplate).send(any(), payloadCaptor.capture());
+        JsonNode node = objectMapper.readTree(payloadCaptor.getValue());
+        assertEquals("UserRegisteredEvent", node.get("eventType").asText());
+        assertEquals("a@b.com", node.get("data").get("email").asText());
+        assertEquals("http://localhost:3000/verify-email?token=raw-refresh",
+                node.get("data").get("verifyLink").asText());
+        assertTrue(node.get("eventId").asText().length() > 0);
     }
 
     @Test
@@ -87,6 +149,7 @@ class AuthServiceTest {
 
         assertThrows(DuplicateResourceException.class, () -> authService.register(req));
         verify(userRepository, never()).save(any());
+        verify(kafkaTemplate, never()).send(any(), anyString());
     }
 
     @Test
@@ -174,5 +237,127 @@ class AuthServiceTest {
 
         // dummy bcrypt match keeps timing uniform with the wrong-password path
         verify(passwordEncoder).matches(eq("password123"), anyString());
+    }
+
+    @Test
+    void verifyEmail_success_marksUserVerifiedAndConsumesToken() {
+        User u = user();
+        VerificationToken token = emailVerifyToken(u.getId(), Instant.now().plusSeconds(3600));
+        when(jwtService.hashToken("raw")).thenReturn("hash");
+        when(verificationTokenRepository.consume(eq("hash"), eq(VerificationPurpose.EMAIL_VERIFY), any(Instant.class)))
+                .thenReturn(1);
+        when(verificationTokenRepository.findByTokenHash("hash")).thenReturn(Optional.of(token));
+        when(userRepository.findById(u.getId())).thenReturn(Optional.of(u));
+
+        authService.verifyEmail(VerifyEmailRequest.builder().token("raw").build());
+
+        assertNotNull(u.getEmailVerifiedAt());
+        verify(verificationTokenRepository).consume(eq("hash"), eq(VerificationPurpose.EMAIL_VERIFY), any(Instant.class));
+        verify(verificationTokenRepository, never()).save(any());
+        verify(userRepository).save(u);
+    }
+
+    @Test
+    void verifyEmail_unknownToken_throwsBadRequest() {
+        when(jwtService.hashToken("bad")).thenReturn("bad-hash");
+        when(verificationTokenRepository.consume(eq("bad-hash"), eq(VerificationPurpose.EMAIL_VERIFY), any(Instant.class)))
+                .thenReturn(0);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                authService.verifyEmail(VerifyEmailRequest.builder().token("bad").build()));
+        verify(userRepository, never()).save(any());
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void forgotPassword_unknownEmail_generatesThrowawayTokenWithoutPublishing() {
+        when(userRepository.findByEmail("nobody@x.com")).thenReturn(Optional.empty());
+
+        authService.forgotPassword(ForgotPasswordRequest.builder().email("nobody@x.com").build());
+
+        // dummy generate+hash keeps timing uniform with the known-email path
+        verify(jwtService).generateRefreshToken();
+        verify(jwtService).hashToken(any());
+        verify(verificationTokenRepository, never()).save(any());
+        verify(kafkaTemplate, never()).send(any(), anyString());
+    }
+
+    @Test
+    void forgotPassword_existingEmail_createsResetTokenAndPublishes() throws Exception {
+        User u = user();
+        when(userRepository.findByEmail("a@b.com")).thenReturn(Optional.of(u));
+        when(jwtService.generateRefreshToken()).thenReturn("raw-reset");
+        when(jwtService.hashToken("raw-reset")).thenReturn("hash-reset");
+        when(verificationTokenRepository.findByUserIdAndPurposeAndUsedAtIsNull(any(), any())).thenReturn(List.of());
+
+        authService.forgotPassword(ForgotPasswordRequest.builder().email("a@b.com").build());
+
+        ArgumentCaptor<VerificationToken> tokenCaptor = ArgumentCaptor.forClass(VerificationToken.class);
+        verify(verificationTokenRepository).save(tokenCaptor.capture());
+        assertEquals(VerificationPurpose.PASSWORD_RESET, tokenCaptor.getValue().getPurpose());
+        assertEquals("hash-reset", tokenCaptor.getValue().getTokenHash());
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(kafkaTemplate).send(any(), payloadCaptor.capture());
+        JsonNode node = objectMapper.readTree(payloadCaptor.getValue());
+        assertEquals("PasswordResetRequestedEvent", node.get("eventType").asText());
+        assertEquals(u.getId().toString(), node.get("data").get("userId").asText());
+        assertEquals("a@b.com", node.get("data").get("email").asText());
+        assertEquals("http://localhost:3000/reset-password?token=raw-reset",
+                node.get("data").get("resetLink").asText());
+        assertTrue(node.get("data").get("expiresAt").asText().endsWith("Z"));
+    }
+
+    @Test
+    void forgotPassword_existingEmail_publishFailureStillSucceeds() {
+        User u = user();
+        when(userRepository.findByEmail("a@b.com")).thenReturn(Optional.of(u));
+        when(jwtService.generateRefreshToken()).thenReturn("raw-reset");
+        when(jwtService.hashToken("raw-reset")).thenReturn("hash-reset");
+        when(verificationTokenRepository.findByUserIdAndPurposeAndUsedAtIsNull(any(), any())).thenReturn(List.of());
+        lenient().when(kafkaTemplate.send(any(), anyString()))
+                .thenThrow(new IllegalStateException("broker down"));
+
+        // không ném ra ngoài — endpoint vẫn trả 200
+        authService.forgotPassword(ForgotPasswordRequest.builder().email("a@b.com").build());
+    }
+
+    @Test
+    void resetPassword_success_changesPasswordAndRevokesActiveRefreshTokens() {
+        User u = user();
+        VerificationToken token = VerificationToken.builder()
+                .userId(u.getId())
+                .tokenHash("hash")
+                .purpose(VerificationPurpose.PASSWORD_RESET)
+                .expiresAt(Instant.now().plusSeconds(1800))
+                .build();
+        RefreshToken active = RefreshToken.builder().userId(u.getId()).revokedAt(null).build();
+        when(jwtService.hashToken("raw")).thenReturn("hash");
+        when(verificationTokenRepository.consume(eq("hash"), eq(VerificationPurpose.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(1);
+        when(verificationTokenRepository.findByTokenHash("hash")).thenReturn(Optional.of(token));
+        when(userRepository.findById(u.getId())).thenReturn(Optional.of(u));
+        when(passwordEncoder.encode("newPass123")).thenReturn("new-hash");
+        when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(u.getId())).thenReturn(List.of(active));
+
+        authService.resetPassword(ResetPasswordRequest.builder().token("raw").newPassword("newPass123").build());
+
+        assertEquals("new-hash", u.getPasswordHash());
+        assertNotNull(active.getRevokedAt());
+        verify(userRepository).save(u);
+        verify(verificationTokenRepository).consume(eq("hash"), eq(VerificationPurpose.PASSWORD_RESET), any(Instant.class));
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void resetPassword_invalidToken_throwsBadRequest() {
+        when(jwtService.hashToken("bad")).thenReturn("bad-hash");
+        when(verificationTokenRepository.consume(eq("bad-hash"), eq(VerificationPurpose.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(0);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                authService.resetPassword(ResetPasswordRequest.builder().token("bad").newPassword("newPass123").build()));
+        verify(userRepository, never()).save(any());
+        verify(passwordEncoder, never()).encode(anyString());
     }
 }

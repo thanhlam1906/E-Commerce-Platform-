@@ -8,7 +8,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.validation.BindException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -60,8 +61,8 @@ public class GlobalExceptionHandler {
                 .body(ApiDataResponse.error(403, "Bạn không có quyền truy cập", null));
     }
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiDataResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
+    @ExceptionHandler(BindException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleValidation(BindException ex) {
         List<ApiDataResponse.FieldError> errors = ex.getBindingResult().getFieldErrors().stream()
                 .map(fieldError -> ApiDataResponse.FieldError.builder()
                         .field(fieldError.getField())
@@ -71,6 +72,12 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiDataResponse.error(400, ErrorMessages.VALIDATION_FAILED, errors));
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiDataResponse<Void>> handleMissingParam(MissingServletRequestParameterException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiDataResponse.error(400, ex.getMessage(), null));
     }
 
     @ExceptionHandler(Exception.class)

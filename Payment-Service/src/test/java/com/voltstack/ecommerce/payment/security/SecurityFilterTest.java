@@ -214,7 +214,8 @@ class SecurityFilterTest {
     @Test
     void history_withoutUserId_isRejected() throws Exception {
         mockMvc.perform(get("/api/v1/payments/history")
-                        .with(servletPath("/api/v1/payments/history")))
+                        .with(servletPath("/api/v1/payments/history"))
+                        .header("X-Internal-Secret", "test-token"))
                 .andExpect(status().is4xxClientError());
 
         verifyNoInteractions(paymentService);
@@ -228,6 +229,7 @@ class SecurityFilterTest {
 
         mockMvc.perform(get("/api/v1/payments/history")
                         .with(servletPath("/api/v1/payments/history"))
+                        .header("X-Internal-Secret", "test-token")
                         .header("X-User-Id", caller.toString()))
                 .andExpect(status().isOk());
 

@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -24,9 +26,13 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -39,6 +45,7 @@ class CartServiceTest {
     private ProductClient productClient;
     private InventoryService inventoryService;
     private HashOperations<String, Object, Object> hashOps;
+    private ValueOperations<String, String> valueOps;
     private CartService cartService;
     private UUID userId;
 
@@ -48,7 +55,9 @@ class CartServiceTest {
         productClient = mock(ProductClient.class);
         inventoryService = mock(InventoryService.class);
         hashOps = mock(HashOperations.class);
+        valueOps = mock(ValueOperations.class);
         when(redis.opsForHash()).thenReturn(hashOps);
+        when(redis.opsForValue()).thenReturn(valueOps);
         cartService = new CartService(redis, productClient, inventoryService);
         ReflectionTestUtils.setField(cartService, "cartTtlDays", 7L);
         userId = UUID.randomUUID();
@@ -88,6 +97,43 @@ class CartServiceTest {
         SecurityContextHolder.clearContext();
         assertThrows(IllegalArgumentException.class, () -> cartService.resolveKey(null));
         assertThrows(IllegalArgumentException.class, () -> cartService.resolveKey("  "));
+    }
+
+    // ---- checkout lock (M2) ----
+
+    @Test
+    void tryAcquireCheckoutLock_returnsTokenOnAcquire() {
+        when(valueOps.setIfAbsent(eq("cart:checkout:" + userId), anyString(), any(Duration.class))).thenReturn(true);
+
+        String token = cartService.tryAcquireCheckoutLock(userId);
+
+        assertNotNull(token);
+        verify(valueOps).setIfAbsent(eq("cart:checkout:" + userId), eq(token), any(Duration.class));
+    }
+
+    @Test
+    void tryAcquireCheckoutLock_lockBusy_returnsNull() {
+        when(valueOps.setIfAbsent(eq("cart:checkout:" + userId), anyString(), any(Duration.class))).thenReturn(false);
+
+        assertNull(cartService.tryAcquireCheckoutLock(userId));
+    }
+
+    @Test
+    void releaseCheckoutLock_usesCompareAndDeleteScript() {
+        String token = "tok-1";
+
+        cartService.releaseCheckoutLock(userId, token);
+
+        verify(redis).execute(any(DefaultRedisScript.class), eq(List.of("cart:checkout:" + userId)), eq(token));
+        verify(redis, never()).delete(anyString());
+    }
+
+    @Test
+    void releaseCheckoutLock_nullToken_noOp() {
+        cartService.releaseCheckoutLock(userId, null);
+
+        verify(redis, never()).execute(any(DefaultRedisScript.class), anyList(), any());
+        verify(redis, never()).delete(anyString());
     }
 
     // ---- addItem / readRawCart / clearCart / getCart ----

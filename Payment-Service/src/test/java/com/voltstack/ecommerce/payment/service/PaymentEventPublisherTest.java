@@ -47,7 +47,7 @@ class PaymentEventPublisherTest {
         verify(outboxRepository).save(captor.capture());
         OutboxEvent event = captor.getValue();
         assertEquals("COMPLETED", event.getEventType());
-        assertEquals(txn.getId().toString(), event.getAggregateId());
+        assertEquals(txn.getOrderId().toString(), event.getAggregateId());
         assertFalse(event.getPublished());
         assertNotNull(event.getPayload());
         assertTrue(event.getPayload().contains("\"eventType\":\"COMPLETED\""));

@@ -15,6 +15,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
  * gRPC to Product-Catalog with Redis snapshot-cache fallback per SRS §11.
@@ -26,6 +27,8 @@ import java.time.Duration;
 public class ProductClient {
 
     private static final String CACHE_KEY = "product:snapshot:";
+    /** M3: bound each call so a hung Product service cannot block the checkout thread forever. */
+    private static final long GRPC_DEADLINE_SECONDS = 5;
 
     @GrpcClient("product-verify")
     private ProductVerifyServiceGrpc.ProductVerifyServiceBlockingStub productStub;
@@ -42,7 +45,8 @@ public class ProductClient {
      */
     public ProductSnapshot getSnapshot(String sku) {
         try {
-            VerifySkuResponse resp = productStub.verifySku(SkuRequest.newBuilder().setSku(sku).build());
+            VerifySkuResponse resp = productStub.withDeadlineAfter(GRPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .verifySku(SkuRequest.newBuilder().setSku(sku).build());
             if (!resp.getExists()) {
                 throw new SkuNotFoundException(ErrorMessages.SKU_NOT_FOUND + ": " + sku);
             }

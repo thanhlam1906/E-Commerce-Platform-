@@ -17,6 +17,7 @@ import com.voltstack.ecommerce.order.entity.OrderStatus;
 import com.voltstack.ecommerce.order.entity.OrderStatusHistory;
 import com.voltstack.ecommerce.order.entity.OutboxEvent;
 import com.voltstack.ecommerce.order.exception.CheckoutInProgressException;
+import com.voltstack.ecommerce.order.exception.DuplicateResourceException;
 import com.voltstack.ecommerce.order.exception.InsufficientStockException;
 import com.voltstack.ecommerce.order.exception.InvalidOrderStateException;
 import com.voltstack.ecommerce.order.exception.PaymentUnavailableException;
@@ -33,6 +34,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -40,11 +43,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -103,13 +108,28 @@ public class OrderService {
                 if (existing.getStatus() == OrderStatus.CANCELLED || existing.getStatus() == OrderStatus.EXPIRED) {
                     throw new IllegalArgumentException(ErrorMessages.IDEMPOTENCY_KEY_EXPIRED);
                 }
+                // M1: same key but different payload is a client bug — reject, never return the stale
+                // order nor overwrite it. (Hash is null only for rows created before M1 shipped.)
+                // The hash covers the cart (sku:qty → amount) + email, so reusing a key after
+                // changing the cart/payload 409s instead of returning the stale order.
+                if (existing.getIdempotencyRequestHash() != null) {
+                    List<CartService.CartItem> cart = cartService.readRawCart(null);
+                    // Empty cart = the original checkout already cleared it (or nothing new was added),
+                    // so this is a retry, not a changed payload — return the same order.
+                    if (!cart.isEmpty()
+                            && !existing.getIdempotencyRequestHash().equals(
+                                    idempotencyHash(userId, idempotencyKey, req, cart))) {
+                        throw new DuplicateResourceException(ErrorMessages.IDEMPOTENCY_KEY_MISMATCH);
+                    }
+                }
                 return toCheckoutResponse(existing);
             }
         }
 
         // Serialize checkout per user so two concurrent POST /orders cannot both read the same
         // cart, double-reserve and double-charge. Released in finally (or Redis TTL expires).
-        if (!cartService.tryAcquireCheckoutLock(userId)) {
+        String lockToken = cartService.tryAcquireCheckoutLock(userId);
+        if (lockToken == null) {
             throw new CheckoutInProgressException(ErrorMessages.CHECKOUT_IN_PROGRESS);
         }
         try {
@@ -130,34 +150,43 @@ public class OrderService {
                 throw new IllegalStateException("Không thể tạo đơn hàng");
             }
 
-            try {
-                String qrImage = null;
-                if (isCod(order.getPaymentMethod())) {
-                    // COD: no gateway transaction, no payment URL/QR. Order stays PENDING awaiting merchant
-                    // (admin) confirmation; emit OrderCreatedEvent now — nothing later enriches it with a URL.
-                    transactionTemplate.executeWithoutResult(s -> outboxRepository.save(OutboxEvent.builder()
-                            .eventType("OrderCreatedEvent").aggregateId(order.getId().toString())
-                            .payload(orderCreatedPayload(order, null)).published(false).build()));
-                } else {
+            String qrImage = null;
+            if (isCod(order.getPaymentMethod())) {
+                // COD: no gateway transaction, no payment URL/QR. Order stays PENDING awaiting merchant
+                // (admin) confirmation; emit OrderCreatedEvent now — nothing later enriches it with a URL.
+                transactionTemplate.executeWithoutResult(s -> outboxRepository.save(OutboxEvent.builder()
+                        .eventType("OrderCreatedEvent").aggregateId(order.getId().toString())
+                        .payload(orderCreatedPayload(order, null)).published(false).build()));
+            } else {
+                // M5: order + stock are already committed. If the payment wiring (HTTP create + outbox)
+                // fails we must compensate — release stock + cancel — or the order stays PENDING with a
+                // live Payment txn and reserved stock forever.
+                try {
                     String returnUrl = (paymentReturnUrl == null || paymentReturnUrl.isBlank()) ? null : paymentReturnUrl;
                     PaymentClient.PaymentResult payment = paymentClient.createPayment(
                             order.getId(), userId, order.getTotalAmount(), "VND",
                             order.getPaymentMethod(), PAYMENT_GATEWAY, returnUrl);
                     transactionTemplate.executeWithoutResult(s -> completePaymentTx(order, payment));
                     qrImage = payment.qrImage();
+                } catch (RuntimeException e) {
+                    log.error("Payment wiring failed for order {}, compensating", order.getId(), e);
+                    transactionTemplate.executeWithoutResult(s -> compensateTx(order.getId(), userId));
+                    throw e;
                 }
+            }
+            // M7: order is committed — a cart-cleanup hiccup must not turn a successful checkout into a 500.
+            try {
                 // Remove only the ordered SKUs — items the user added during the payment call survive.
                 cartService.removeItems(null, cart.stream().map(CartService.CartItem::sku).toList());
-                CheckoutResponse response = toCheckoutResponse(orderRepository.findById(order.getId()).orElseThrow());
-                // Not persisted — the QR is for the immediate post-checkout "quét mã QR" screen (COD has none).
-                response.setQrImage(qrImage);
-                return response;
-            } catch (PaymentUnavailableException e) {
-                transactionTemplate.executeWithoutResult(s -> compensateTx(order.getId(), userId));
-                throw e;
+            } catch (RuntimeException e) {
+                log.warn("Failed to remove ordered SKUs from cart for order {}, order is committed", order.getId(), e);
             }
+            CheckoutResponse response = toCheckoutResponse(orderRepository.findById(order.getId()).orElseThrow());
+            // Not persisted — the QR is for the immediate post-checkout "quét mã QR" screen (COD has none).
+            response.setQrImage(qrImage);
+            return response;
         } finally {
-            cartService.releaseCheckoutLock(userId);
+            cartService.releaseCheckoutLock(userId, lockToken);
         }
     }
 
@@ -183,7 +212,7 @@ public class OrderService {
                 .shippingAddressSnapshot(req.getShippingAddress())
                 .paymentMethod(req.getPaymentMethod()).paymentGateway(isCod(req.getPaymentMethod()) ? "COD" : PAYMENT_GATEWAY)
                 .idempotencyKey(idempotencyKey)
-                .idempotencyRequestHash(sha256(userId + "|" + idempotencyKey + "|" + req.getShippingAddress() + req.getPaymentMethod()))
+                .idempotencyRequestHash(idempotencyKey == null ? null : idempotencyHash(userId, idempotencyKey, req, cart))
                 .orderItems(items).build();
         for (OrderItem item : items) {
             item.setOrder(order);
@@ -223,6 +252,30 @@ public class OrderService {
                     .oldStatus(OrderStatus.PENDING).newStatus(OrderStatus.CANCELLED)
                     .changedBy(userId).reason("Payment unavailable, auto-cancelled").build());
         }
+    }
+
+    /**
+     * Cancel a COD order still PENDING past the merchant-confirmation window (COD timeout scheduler).
+     * Reuses the same release + history + outbox path as the admin cancel. Idempotent: the guarded
+     * PENDING→CANCELLED transition means a concurrent admin cancel / payment event wins and we no-op.
+     * ponytail: only COD — online PENDING expiry is owned by Payment-Service (TIMEOUT), running two
+     * clocks on the same order would double-expire.
+     */
+    @Transactional
+    public int expireCodPending(UUID orderId) {
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null || order.getStatus() != OrderStatus.PENDING || !"COD".equals(order.getPaymentGateway())) {
+            return 0;
+        }
+        if (orderRepository.transition(orderId, "PENDING", "CANCELLED") == 0) {
+            return 0;
+        }
+        for (OrderItem item : orderItemRepository.findByOrderId(orderId)) {
+            inventoryService.release(item.getSku(), item.getQuantity(), "order:" + orderId);
+        }
+        historyRepository.save(history(orderId, OrderStatus.PENDING, OrderStatus.CANCELLED, "COD quá hạn chờ xác nhận"));
+        emitOutbox("OrderCancelledEvent", order, OrderStatus.CANCELLED, "COD pending timeout");
+        return 1;
     }
 
     // ---- Reads ----
@@ -357,10 +410,25 @@ public class OrderService {
         if (order.getPaymentTransactionId() == null) {
             return;
         }
-        try {
-            paymentClient.refund(order.getId(), order.getPaymentTransactionId());
-        } catch (PaymentUnavailableException e) {
-            log.warn("Refund failed for order {}, will need out-of-band handling", order.getId(), e);
+        // M8: fire the HTTP refund only after this DB tx commits, so a slow Payment call never holds
+        // the orders row lock. On rollback the refund is skipped (the cancel did not persist). Outside
+        // a tx (unit tests) it runs inline.
+        Runnable refund = () -> {
+            try {
+                paymentClient.refund(order.getId(), order.getPaymentTransactionId());
+            } catch (PaymentUnavailableException e) {
+                log.warn("Refund failed for order {}, will need out-of-band handling", order.getId(), e);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    refund.run();
+                }
+            });
+        } else {
+            refund.run();
         }
     }
 
@@ -453,6 +521,17 @@ public class OrderService {
         if (key != null && !IDEMPOTENCY_KEY_PATTERN.matcher(key).matches()) {
             throw new IllegalArgumentException(ErrorMessages.INVALID_IDEMPOTENCY_KEY);
         }
+    }
+
+    private String idempotencyHash(UUID userId, String idempotencyKey, CreateOrderRequest req,
+                                   List<CartService.CartItem> cart) {
+        // Canonical cart form (sorted sku:qty) so a key reused after the cart changed hashes differently.
+        String cartPart = cart.stream()
+                .sorted(Comparator.comparing(CartService.CartItem::sku))
+                .map(c -> c.sku() + ":" + c.quantity())
+                .collect(Collectors.joining(","));
+        return sha256(userId + "|" + idempotencyKey + "|" + cartPart + "|" + req.getEmail()
+                + "|" + req.getShippingAddress() + "|" + req.getPaymentMethod());
     }
 
     private String sha256(String input) {
