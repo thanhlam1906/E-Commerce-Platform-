@@ -1,0 +1,350 @@
+# Prod compose — GHCR images, non-root baked into images, restart policy.
+# ONLY port 80 is published (api-gateway). Infra is internal-only (no host ports).
+#
+# Usage:  docker compose -f docker-compose.prod.yml up -d
+# Secrets REQUIRED from root .env (or shell env):
+#   INTERNAL_SERVICE_TOKEN (must be IDENTICAL across api-gateway + order + payment)
+# Recommend also setting: VNPAY_SECRET, VNPAY_TMN_CODE, VNPAY_RETURN_URL,
+#   PAYMENT_RETURN_URL, CLOUDINARY_*, CORS_ORIGINS, SMTP_HOST, NOTIFICATION_EMAIL_*
+#
+# Images: ghcr.io/thanhlam1906/<service>:latest  (replace org if different)
+
+name: ecommerce-prod
+
+x-common-env: &common-env
+  EUREKA_URI: "http://eureka-server:8761/eureka/,http://eureka-server-2:8762/eureka/"
+  CONFIG_SERVER_URL: "http://config-server:8888"
+  SPRING_PROFILES_ACTIVE: prod
+  INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must match api-gateway + order-service + payment-service}
+
+x-healthcheck: &healthcheck
+  test: ["CMD-SHELL", "curl -fsS http://localhost/actuator/health || exit 1"]
+  interval: 30s
+  timeout: 5s
+  start_period: 60s
+  retries: 3
+
+x-limits: &limits
+  deploy:
+    resources:
+      limits:
+        memory: 1g
+        cpus: '1.0'
+
+volumes:
+  pgdata:
+  orders_pgdata:
+  payments_pgdata:
+  mongo_data:
+
+services:
+  # ============================== INFRA (internal only) ==============================
+  postgres:
+    image: postgres:16
+    container_name: identity-postgres
+    <<: *limits
+    environment:
+      POSTGRES_DB: identity
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required for postgres}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  postgres-orders:
+    image: postgres:16
+    container_name: order-postgres
+    <<: *limits
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required for postgres}
+    volumes: [orders_pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  postgres-payments:
+    image: postgres:16
+    container_name: payment-postgres
+    <<: *limits
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required for postgres}
+    volumes: [payments_pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: gateway-redis
+    <<: *limits
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7
+    container_name: mongodb
+    <<: *limits
+    volumes: [mongo_data:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: kafka
+    <<: *limits
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # ============================ DISCOVERY / CONFIG ============================
+  eureka-server:
+    image: ghcr.io/thanhlam1906/eureka-server:latest
+    container_name: eureka-server
+    <<: *limits
+    environment:
+      SPRING_PROFILES_ACTIVE: peer1
+      INSTANCE_HOSTNAME: eureka-server
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://eureka-server-2:8762/eureka/"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8761/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  eureka-server-2:
+    image: ghcr.io/thanhlam1906/eureka-server:latest
+    container_name: eureka-server-2
+    <<: *limits
+    environment:
+      SPRING_PROFILES_ACTIVE: peer2
+      INSTANCE_HOSTNAME: eureka-server-2
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://eureka-server:8761/eureka/"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8762/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  config-server:
+    image: ghcr.io/thanhlam1906/config-server:latest
+    container_name: config-server
+    <<: *limits
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: config-server
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8888/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  # =============================== GATEWAY (only exposed port) ===============================
+  api-gateway:
+    image: ghcr.io/thanhlam1906/api-gateway:latest
+    container_name: api-gateway
+    <<: *limits
+    # TLS (443) terminates at the reverse proxy / ingress in front of this host.
+    ports: ["80:8080"]
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: api-gateway
+      REDIS_HOST: redis
+      JWT_JWKS_URI: "http://identity-service:8082/.well-known/jwks.json"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    depends_on:
+      redis:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  # =============================== SERVICES ===============================
+  product-catalog-service:
+    image: ghcr.io/thanhlam1906/product-catalog-service:latest
+    container_name: product-catalog-service
+    <<: *limits
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: product-catalog-service
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      SPRING_DATA_MONGODB_URI: "mongodb://mongodb:27017/product-catalog"
+      GRPC_SERVER_PORT: 9091
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  identity-service:
+    image: ghcr.io/thanhlam1906/identity-service:latest
+    container_name: identity-service
+    <<: *limits
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: identity-service
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      DB_URL: "jdbc:postgresql://postgres:5432/identity?TimeZone=UTC"
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      IDENTITY_FRONTEND_BASE_URL: ${IDENTITY_FRONTEND_BASE_URL:-https://localhost}
+    # JWT keys are FILES (jwt.private-key-path in Identity), provisioned on the host:
+    #   mkdir -p secrets/identity && openssl genrsa -out secrets/identity/private.pem 2048
+    volumes: ["./secrets/identity:/app/keys:ro"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8082/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  order-service:
+    image: ghcr.io/thanhlam1906/order-service:latest
+    container_name: order-service
+    <<: *limits
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: order-service
+      DB_URL: "jdbc:postgresql://postgres-orders:5432/orders?TimeZone=UTC"
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PRODUCT_GRPC_ADDRESS: "product-catalog-service:9091"
+      PRODUCT_CATALOG_URL: "http://product-catalog-service:8081"
+      IDENTITY_SERVICE_URL: "http://identity-service:8082"
+      PAYMENT_SERVICE_URL: "http://payment-service:8084"
+      PAYMENT_RETURN_URL: ${PAYMENT_RETURN_URL:?PAYMENT_RETURN_URL must be the public VNPay return URL}
+    depends_on:
+      postgres-orders:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  payment-service:
+    image: ghcr.io/thanhlam1906/payment-service:latest
+    container_name: payment-service
+    <<: *limits
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: payment-service
+      DB_URL: "jdbc:postgresql://postgres-payments:5432/payments?TimeZone=UTC"
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      VNPAY_SECRET: ${VNPAY_SECRET:-}
+      VNPAY_TMN_CODE: ${VNPAY_TMN_CODE:-}
+      VNPAY_RETURN_URL: ${VNPAY_RETURN_URL:?VNPAY_RETURN_URL must be the public VNPay return URL}
+      VNPAY_IP_ADDR: ${VNPAY_IP_ADDR:-127.0.0.1}
+      PAYMENT_SANDBOX_ENABLED: "false"
+    depends_on:
+      postgres-payments:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8084/actuator/health || exit 1"]
+    restart: unless-stopped
+
+  notification-service:
+    image: ghcr.io/thanhlam1906/notification-service:latest
+    container_name: notification-service
+    <<: *limits
+    environment:
+      <<: *common-env
+      INSTANCE_HOSTNAME: notification-service
+      MONGODB_URI: "mongodb://mongodb:27017/notification"
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      NOTIFICATION_EMAIL_PROVIDER: ${NOTIFICATION_EMAIL_PROVIDER:-log}
+      NOTIFICATION_EMAIL_FROM: ${NOTIFICATION_EMAIL_FROM:-no-reply@localhost}
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME:-}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8085/actuator/health || exit 1"]
+    restart: unless-stopped

@@ -24,11 +24,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
-      show-details: always
-
-logging:
-  pattern:
-    console: '{"timestamp":"%d{ISO8601}","level":"%p","service":"${spring.application.name}","traceId":"%X{traceId:-}","spanId":"%X{spanId:-}","thread":"%t","logger":"%c","message":"%m"}%n'
+      show-details: when-authorized

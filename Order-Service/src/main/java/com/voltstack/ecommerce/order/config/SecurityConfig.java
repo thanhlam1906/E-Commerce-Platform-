@@ -26,7 +26,7 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/actuator/health", "/api/v1/cart/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/prometheus", "/api/v1/cart/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(headerAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();

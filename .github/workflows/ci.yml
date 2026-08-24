@@ -1,0 +1,175 @@
+# =============================================================================
+# Phase 1 CI/CD — build + test + scan + push image to GHCR.
+# (deploy staging/prod lives in deploy.yml, triggered via workflow_run)
+#
+# Flow per docs/requirements/11-implementation-phases.md §3.1:
+#   build (Gradle) -> test -> scan -> push image (tag: <sha> + latest)
+#
+# Triggers:
+#   - push to main  : build-test -> security-scan -> scan-push (GHCR)
+#   - PR to main    : build-test + security-scan only (no image push)
+#
+# 8 services -> 1 matrix cell each:
+#   image                   | dir                    | port | health path
+#   ------------------------|------------------------|------|---------------
+#   eureka-server           | Eureka-Server          | 8761 | /actuator/health
+#   config-server           | Config-Server          | 8888 | /actuator/health
+#   api-gateway             | ApiGateway             | 8080 | /actuator/health
+#   product-catalog-service | Product-Catalog-Service| 8081 | /actuator/health
+#   identity-service        | Identity-Service       | 8082 | /actuator/health
+#   order-service           | Order-Service          | 8083 | /actuator/health
+#   payment-service         | Payment-Service        | 8084 | /actuator/health
+#   notification-service    | Notification-Service   | 8085 | /actuator/health
+#
+# GitHub Secrets required:
+#   GITHUB_TOKEN          built-in; GHCR push needs repo "Packages: write" permission.
+#   GHCR_TOKEN            optional PAT (read:packages) — used instead of GITHUB_TOKEN
+#                         when the deploy host / other repos must pull images.
+#   GHCR_USER             optional; image registry username (defaults to repo owner).
+#
+# Notes:
+#   - Runner is Linux; every service ships gradlew (unix, exec bit committed) and
+#     gradlew.bat. We chmod +x defensively before running ./gradlew.
+#   - gitleaks/trufflehog/osv-scanner scan the whole repo ONCE (security-scan job),
+#     not 8x per matrix cell.
+#   - osv-scanner needs lockfiles; none committed yet (no gradle.lockfile). It is a
+#     safety net only — Java dependency vulns are caught by trivy on the built image.
+#   - trivy (image) runs in scan-push where the image is built, i.e. on main only.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build + test per service (matrix, 8 cells).
+  # ---------------------------------------------------------------------------
+  build-test:
+    name: build-test (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: eureka-server,            dir: Eureka-Server,             port: 8761, health: /actuator/health }
+          - { image: config-server,            dir: Config-Server,             port: 8888, health: /actuator/health }
+          - { image: api-gateway,              dir: ApiGateway,                port: 8080, health: /actuator/health }
+          - { image: product-catalog-service,  dir: Product-Catalog-Service,   port: 8081, health: /actuator/health }
+          - { image: identity-service,         dir: Identity-Service,          port: 8082, health: /actuator/health }
+          - { image: order-service,            dir: Order-Service,             port: 8083, health: /actuator/health }
+          - { image: payment-service,          dir: Payment-Service,           port: 8084, health: /actuator/health }
+          - { image: notification-service,     dir: Notification-Service,      port: 8085, health: /actuator/health }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 23 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '23'
+
+      - name: Set up Gradle (cached)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+        working-directory: ${{ matrix.dir }}
+
+      - name: Build + test
+        run: ./gradlew build
+        working-directory: ${{ matrix.dir }}
+
+  # ---------------------------------------------------------------------------
+  # Repo-wide secret + dependency scan (once, not per cell).
+  # Fails the build on: leaked secrets (gitleaks/trufflehog) and HIGH/CRITICAL
+  # dependency vulns (osv-scanner).
+  # ---------------------------------------------------------------------------
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Secret scan (gitleaks)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" -w /repo \
+            ghcr.io/gitleaks/gitleaks:latest detect --source /repo --no-banner --redact --verbose
+
+      - name: Secret scan (trufflehog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+
+      - name: Dependency scan (osv-scanner, fail on HIGH+)
+        uses: google/osv-scanner-action@v1.0.1
+        with:
+          scan-args: --recursive --fail-on-vuln=high .
+
+  # ---------------------------------------------------------------------------
+  # Build image (from <service>/Dockerfile), trivy-scan it, then push to GHCR
+  # tagged <sha> + latest. Only on push to main (images are never pushed for PRs).
+  # ---------------------------------------------------------------------------
+  scan-push:
+    name: scan-push (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    needs: [build-test, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: eureka-server,            dir: Eureka-Server,             port: 8761, health: /actuator/health }
+          - { image: config-server,            dir: Config-Server,             port: 8888, health: /actuator/health }
+          - { image: api-gateway,              dir: ApiGateway,                port: 8080, health: /actuator/health }
+          - { image: product-catalog-service,  dir: Product-Catalog-Service,   port: 8081, health: /actuator/health }
+          - { image: identity-service,         dir: Identity-Service,          port: 8082, health: /actuator/health }
+          - { image: order-service,            dir: Order-Service,             port: 8083, health: /actuator/health }
+          - { image: payment-service,          dir: Payment-Service,           port: 8084, health: /actuator/health }
+          - { image: notification-service,     dir: Notification-Service,      port: 8085, health: /actuator/health }
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USER || github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.dir }}
+          file: ${{ matrix.dir }}/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Trivy image scan (fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Push to GHCR
+        run: docker push "$IMAGE" --all-tags

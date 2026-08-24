@@ -26,7 +26,7 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/webhooks/sandbox/**").authenticated()
-                        .requestMatchers("/actuator/health", "/webhooks/**", "/api/v1/payments/vnpay/return").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/prometheus", "/webhooks/**", "/api/v1/payments/vnpay/return").permitAll()
                         .requestMatchers("/internal/**").authenticated()
                         .anyRequest().authenticated())
                 .addFilterBefore(new InternalTokenFilter(internalToken), UsernamePasswordAuthenticationFilter.class)
