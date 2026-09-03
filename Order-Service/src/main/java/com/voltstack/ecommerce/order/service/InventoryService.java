@@ -1,6 +1,7 @@
 package com.voltstack.ecommerce.order.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.voltstack.ecommerce.order.client.ProductClient;
 import com.voltstack.ecommerce.order.constant.ErrorMessages;
 import com.voltstack.ecommerce.order.dto.request.ImportInventoryRequest;
 import com.voltstack.ecommerce.order.dto.response.ImportInventoryResponse;
@@ -35,12 +36,16 @@ public class InventoryService {
     private final InventoryTransactionRepository transactionRepository;
     private final OutboxRepository outboxRepository;
     private final ObjectMapper objectMapper;
+    private final ProductClient productClient;
 
     @Value("${inventory.low-stock-threshold:5}")
     private int lowStockThreshold;
 
     @Transactional
     public ImportInventoryResponse importStock(ImportInventoryRequest req) {
+        // Guard: SKU phải tồn tại trong catalog — nếu không sẽ upsert ra "kho ma" khi gõ nhầm
+        // mã. SkuNotFoundException → 409; catalog không với tới → 503 (ProductUnavailable).
+        productClient.getSnapshot(req.getSku());
         String reference = req.getReference() == null || req.getReference().isBlank()
                 ? "import_batch_" + UUID.randomUUID()
                 : req.getReference();

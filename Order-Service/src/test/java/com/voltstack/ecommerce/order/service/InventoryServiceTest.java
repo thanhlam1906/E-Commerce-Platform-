@@ -1,12 +1,15 @@
 package com.voltstack.ecommerce.order.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.voltstack.ecommerce.order.client.ProductClient;
+import com.voltstack.ecommerce.order.client.ProductSnapshot;
 import com.voltstack.ecommerce.order.dto.request.ImportInventoryRequest;
 import com.voltstack.ecommerce.order.dto.response.ImportInventoryResponse;
 import com.voltstack.ecommerce.order.entity.Inventory;
 import com.voltstack.ecommerce.order.entity.InventoryTransaction;
 import com.voltstack.ecommerce.order.entity.InventoryTxnType;
 import com.voltstack.ecommerce.order.entity.OutboxEvent;
+import com.voltstack.ecommerce.order.exception.SkuNotFoundException;
 import com.voltstack.ecommerce.order.repository.InventoryRepository;
 import com.voltstack.ecommerce.order.repository.InventoryTransactionRepository;
 import com.voltstack.ecommerce.order.repository.OutboxRepository;
@@ -19,8 +22,11 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -33,6 +39,7 @@ class InventoryServiceTest {
     private InventoryTransactionRepository transactionRepository;
     private OutboxRepository outboxRepository;
     private ObjectMapper objectMapper;
+    private ProductClient productClient;
     private InventoryService inventoryService;
 
     @BeforeEach
@@ -41,8 +48,11 @@ class InventoryServiceTest {
         transactionRepository = mock(InventoryTransactionRepository.class);
         outboxRepository = mock(OutboxRepository.class);
         objectMapper = mock(ObjectMapper.class);
-        inventoryService = new InventoryService(inventoryRepository, transactionRepository, outboxRepository, objectMapper);
+        productClient = mock(ProductClient.class);
+        inventoryService = new InventoryService(inventoryRepository, transactionRepository, outboxRepository, objectMapper, productClient);
         ReflectionTestUtils.setField(inventoryService, "lowStockThreshold", 5);
+        // SKU tồn tại trong catalog mặc định — import hợp lệ khi productClient xác nhận.
+        when(productClient.getSnapshot(anyString())).thenReturn(new ProductSnapshot("SKU1", "Product", "Variant", "100"));
     }
 
     private Inventory inv(int quantity, int reserved) {
@@ -63,6 +73,17 @@ class InventoryServiceTest {
         verify(transactionRepository).save(argThatType(InventoryTxnType.IMPORT));
         assertEquals(20, resp.getQuantity());
         assertTrue(resp.getReference().startsWith("import_batch_"));
+    }
+
+    @Test
+    void importStock_unknownSku_throwsAndDoesNotTouchInventory() {
+        when(productClient.getSnapshot("GHOST")).thenThrow(new SkuNotFoundException("Sản phẩm không tồn tại: GHOST"));
+        ImportInventoryRequest req = ImportInventoryRequest.builder().sku("GHOST").quantity(10).build();
+
+        assertThrows(SkuNotFoundException.class, () -> inventoryService.importStock(req));
+
+        verify(inventoryRepository, never()).upsertQuantity(anyString(), anyInt());
+        verify(transactionRepository, never()).save(any(InventoryTransaction.class));
     }
 
     // ---- reserve ----
