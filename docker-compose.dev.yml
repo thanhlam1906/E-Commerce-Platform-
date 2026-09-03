@@ -249,6 +249,9 @@ services:
       DB_PASSWORD: postgres
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       IDENTITY_FRONTEND_BASE_URL: ${IDENTITY_FRONTEND_BASE_URL:-http://localhost:3000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8080/api/v1/auth/google/callback}
     ports: ["8082:8082"]
     depends_on:
       postgres:
@@ -336,6 +339,9 @@ services:
       REDIS_HOST: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_AUTH: ${SMTP_AUTH:-true}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       NOTIFICATION_EMAIL_PROVIDER: ${NOTIFICATION_EMAIL_PROVIDER:-log}
       NOTIFICATION_EMAIL_FROM: ${NOTIFICATION_EMAIL_FROM:-no-reply@localhost}
       SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME:-}
