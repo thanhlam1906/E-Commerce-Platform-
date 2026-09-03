@@ -35,7 +35,7 @@ class ProductControllerSecurityTest {
 
     @Test
     void getProducts_noToken_returns200() throws Exception {
-        when(productService.findAllProducts(any(), any(), any())).thenReturn(Page.empty());
+        when(productService.findAllProducts(any(), any(), any(), any())).thenReturn(Page.empty());
 
         mockMvc.perform(get("/api/v1/products"))
                 .andExpect(status().isOk());

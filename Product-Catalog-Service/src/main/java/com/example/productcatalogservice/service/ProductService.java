@@ -6,19 +6,25 @@ import com.example.productcatalogservice.dto.response.ProductResponse;
 import com.example.productcatalogservice.exception.DuplicateResourceException;
 import com.example.productcatalogservice.exception.ResourceNotFoundException;
 import com.example.productcatalogservice.mapper.ProductMapper;
+import com.example.productcatalogservice.model.Category;
 import com.example.productcatalogservice.model.Product;
 import com.example.productcatalogservice.model.ProductVariant;
+import com.example.productcatalogservice.model.enums.CategoryStatus;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import com.example.productcatalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.text.Normalizer;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +41,7 @@ public class ProductService {
     private final CategoryRepository categoryRepository;
     private final CloudinaryService cloudinaryService;
     private final ProductMapper productMapper;
+    private final MongoTemplate mongoTemplate;
 
     // ---- Create (multipart) ----
 
@@ -58,16 +65,62 @@ public class ProductService {
 
     // ---- Read ----
 
-    public Page<ProductResponse> findAllProducts(String categoryId, String keyword, Pageable pageable) {
+    public Page<ProductResponse> findAllProducts(String categoryId, String brand, String keyword, Pageable pageable) {
+        // Keyword (text search) thắng các filter khác — giữ hành vi cũ.
         if (keyword != null && !keyword.isBlank()) {
             return productRepository.searchByKeyword(keyword.trim(), pageable)
                     .map(productMapper::toResponse);
         }
-        if (categoryId != null && !categoryId.isBlank()) {
-            return productRepository.findByCategoryIdAndIsActiveTrue(categoryId, pageable)
-                    .map(productMapper::toResponse);
+
+        brand = (brand == null || brand.isBlank()) ? null : brand.trim();
+        // categoryId là category cha → gom luôn sản phẩm của các category con (tree 2+ tầng).
+        List<String> categoryIds = (categoryId == null || categoryId.isBlank())
+                ? null
+                : expandCategoryTree(categoryId);
+
+        Page<Product> page;
+        if (categoryIds != null && brand != null) {
+            page = productRepository.findByCategoryIdInAndBrandAndIsActiveTrue(categoryIds, brand, pageable);
+        } else if (categoryIds != null) {
+            page = productRepository.findByCategoryIdInAndIsActiveTrue(categoryIds, pageable);
+        } else if (brand != null) {
+            page = productRepository.findByBrandAndIsActiveTrue(brand, pageable);
+        } else {
+            page = productRepository.findAllByIsActiveTrue(pageable);
         }
-        return productRepository.findAllByIsActiveTrue(pageable).map(productMapper::toResponse);
+        return page.map(productMapper::toResponse);
+    }
+
+    /** Thương hiệu đang bán. categoryId tuỳ chọn → chỉ brand của sản phẩm thuộc category đó + các category con. */
+    public List<String> findActiveBrands(String categoryId) {
+        Query query = new Query(Criteria.where("isActive").is(true).and("brand").nin(null, ""));
+        if (categoryId != null && !categoryId.isBlank()) {
+            query.addCriteria(Criteria.where("categoryId").in(expandCategoryTree(categoryId)));
+        }
+        return mongoTemplate.findDistinct(query, "brand", Product.class, String.class).stream()
+                .sorted()
+                .toList();
+    }
+
+    /** BFS: bản thân category + toàn bộ category con (parentId). */
+    private List<String> expandCategoryTree(String rootId) {
+        List<Category> all = categoryRepository.findAllByStatus(CategoryStatus.ACTIVE, Pageable.unpaged()).getContent();
+        Map<String, List<String>> childrenByParent = new HashMap<>();
+        for (Category c : all) {
+            childrenByParent.computeIfAbsent(c.getParentId() == null ? "" : c.getParentId(),
+                    k -> new ArrayList<>()).add(c.getId());
+        }
+
+        List<String> result = new ArrayList<>();
+        ArrayDeque<String> queue = new ArrayDeque<>();
+        queue.add(rootId);
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            result.add(current);
+            List<String> children = childrenByParent.get(current);
+            if (children != null) queue.addAll(children);
+        }
+        return result;
     }
 
     public Page<ProductResponse> findInactiveProducts(Pageable pageable) {

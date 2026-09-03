@@ -5,8 +5,10 @@ import com.example.productcatalogservice.dto.response.ProductResponse;
 import com.example.productcatalogservice.exception.DuplicateResourceException;
 import com.example.productcatalogservice.exception.ResourceNotFoundException;
 import com.example.productcatalogservice.mapper.ProductMapper;
+import com.example.productcatalogservice.model.Category;
 import com.example.productcatalogservice.model.Product;
 import com.example.productcatalogservice.model.ProductVariant;
+import com.example.productcatalogservice.model.enums.CategoryStatus;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import com.example.productcatalogservice.repository.ProductRepository;
 import org.junit.jupiter.api.Test;
@@ -16,7 +18,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -26,7 +31,9 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,6 +50,8 @@ class ProductServiceTest {
     private CloudinaryService cloudinaryService;
     @Mock
     private ProductMapper productMapper;
+    @Mock
+    private MongoTemplate mongoTemplate;
     @InjectMocks
     private ProductService productService;
 
@@ -65,25 +74,69 @@ class ProductServiceTest {
 
     // ---- findAllProducts ----
 
+    private Category category(String id, String parentId) {
+        return Category.builder().id(id).parentId(parentId).status(CategoryStatus.ACTIVE).build();
+    }
+
+    private void stubActiveCategories(Category... cats) {
+        when(categoryRepository.findAllByStatus(eq(CategoryStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(cats)));
+    }
+
     @Test
     void findAllProducts_keyword_usesSearch() {
         Pageable pageable = Pageable.unpaged();
         when(productRepository.searchByKeyword("phone", pageable)).thenReturn(Page.empty());
 
-        productService.findAllProducts(null, " phone ", pageable);
+        productService.findAllProducts(null, null, " phone ", pageable);
 
         verify(productRepository).searchByKeyword("phone", pageable);
-        verify(productRepository, never()).findByCategoryIdAndIsActiveTrue(any(), any());
+        verify(productRepository, never()).findByCategoryIdInAndIsActiveTrue(any(), any());
     }
 
     @Test
-    void findAllProducts_categoryId_usesCategoryFilter() {
+    void findAllProducts_leafCategory_filtersExact() {
         Pageable pageable = Pageable.unpaged();
-        when(productRepository.findByCategoryIdAndIsActiveTrue("c1", pageable)).thenReturn(Page.empty());
+        stubActiveCategories(category("c1", null));
+        when(productRepository.findByCategoryIdInAndIsActiveTrue(List.of("c1"), pageable)).thenReturn(Page.empty());
 
-        productService.findAllProducts("c1", null, pageable);
+        productService.findAllProducts("c1", null, null, pageable);
 
-        verify(productRepository).findByCategoryIdAndIsActiveTrue("c1", pageable);
+        verify(productRepository).findByCategoryIdInAndIsActiveTrue(List.of("c1"), pageable);
+    }
+
+    @Test
+    void findAllProducts_parentCategory_includesDescendants() {
+        Pageable pageable = Pageable.unpaged();
+        stubActiveCategories(category("c1", null), category("c1a", "c1"), category("c1b", "c1a"));
+        when(productRepository.findByCategoryIdInAndIsActiveTrue(List.of("c1", "c1a", "c1b"), pageable))
+                .thenReturn(Page.empty());
+
+        productService.findAllProducts("c1", null, null, pageable);
+
+        verify(productRepository).findByCategoryIdInAndIsActiveTrue(List.of("c1", "c1a", "c1b"), pageable);
+    }
+
+    @Test
+    void findAllProducts_brand_filtersBrand() {
+        Pageable pageable = Pageable.unpaged();
+        when(productRepository.findByBrandAndIsActiveTrue("Nike", pageable)).thenReturn(Page.empty());
+
+        productService.findAllProducts(null, " Nike ", null, pageable);
+
+        verify(productRepository).findByBrandAndIsActiveTrue("Nike", pageable);
+    }
+
+    @Test
+    void findAllProducts_categoryAndBrand_combines() {
+        Pageable pageable = Pageable.unpaged();
+        stubActiveCategories(category("c1", null));
+        when(productRepository.findByCategoryIdInAndBrandAndIsActiveTrue(List.of("c1"), "Apple", pageable))
+                .thenReturn(Page.empty());
+
+        productService.findAllProducts("c1", "Apple", null, pageable);
+
+        verify(productRepository).findByCategoryIdInAndBrandAndIsActiveTrue(List.of("c1"), "Apple", pageable);
     }
 
     @Test
@@ -91,9 +144,39 @@ class ProductServiceTest {
         Pageable pageable = Pageable.unpaged();
         when(productRepository.findAllByIsActiveTrue(pageable)).thenReturn(Page.empty());
 
-        productService.findAllProducts(null, null, pageable);
+        productService.findAllProducts(null, null, null, pageable);
 
         verify(productRepository).findAllByIsActiveTrue(pageable);
+    }
+
+    // ---- findActiveBrands ----
+
+    @Test
+    void findActiveBrands_all_returnsSortedDistinctNoCategoryFilter() {
+        when(mongoTemplate.findDistinct(any(Query.class), eq("brand"), eq(Product.class), eq(String.class)))
+                .thenReturn(List.of("Zara", "Apple"));
+
+        assertEquals(List.of("Apple", "Zara"), productService.findActiveBrands(null));
+
+        ArgumentCaptor<Query> captor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).findDistinct(captor.capture(), eq("brand"), eq(Product.class), eq(String.class));
+        assertFalse(captor.getValue().getQueryObject().containsKey("categoryId"));
+    }
+
+    @Test
+    void findActiveBrands_byCategory_includesDescendantsInQuery() {
+        stubActiveCategories(category("c1", null), category("c1a", "c1"));
+        when(mongoTemplate.findDistinct(any(Query.class), eq("brand"), eq(Product.class), eq(String.class)))
+                .thenReturn(List.of("Nike"));
+
+        assertEquals(List.of("Nike"), productService.findActiveBrands("c1"));
+
+        ArgumentCaptor<Query> captor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).findDistinct(captor.capture(), eq("brand"), eq(Product.class), eq(String.class));
+        String query = captor.getValue().toString();
+        assertTrue(query.contains("categoryId"));
+        assertTrue(query.contains("c1"));
+        assertTrue(query.contains("c1a"));
     }
 
     // ---- findProductById ----

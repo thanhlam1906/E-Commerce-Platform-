@@ -52,9 +52,16 @@ public class ProductController {
     @GetMapping
     public ResponseEntity<ApiDataResponse<Page<ProductResponse>>> findAllProducts(
             @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false) String brand,
             @RequestParam(required = false) String keyword,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ResponseEntity.ok(ApiDataResponse.ok(productService.findAllProducts(categoryId, keyword, pageable)));
+        return ResponseEntity.ok(ApiDataResponse.ok(productService.findAllProducts(categoryId, brand, keyword, pageable)));
+    }
+
+    @GetMapping("/brands")
+    public ResponseEntity<ApiDataResponse<List<String>>> findActiveBrands(
+            @RequestParam(required = false) String categoryId) {
+        return ResponseEntity.ok(ApiDataResponse.ok(productService.findActiveBrands(categoryId)));
     }
 
     @GetMapping("/inactive")

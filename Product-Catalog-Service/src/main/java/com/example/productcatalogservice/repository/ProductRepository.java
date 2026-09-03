@@ -7,6 +7,7 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,7 +18,11 @@ public interface ProductRepository extends MongoRepository<Product, String> {
 
     Page<Product> findAllByIsActiveFalse(Pageable pageable);
 
-    Page<Product> findByCategoryIdAndIsActiveTrue(String categoryId, Pageable pageable);
+    Page<Product> findByCategoryIdInAndIsActiveTrue(Collection<String> categoryIds, Pageable pageable);
+
+    Page<Product> findByBrandAndIsActiveTrue(String brand, Pageable pageable);
+
+    Page<Product> findByCategoryIdInAndBrandAndIsActiveTrue(Collection<String> categoryIds, String brand, Pageable pageable);
 
     @Query("{ $text: { $search: ?0 }, 'isActive': true }")
     Page<Product> searchByKeyword(String keyword, Pageable pageable);
