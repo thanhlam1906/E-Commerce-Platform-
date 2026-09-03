@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -42,6 +43,11 @@ public class CreateProductRequest {
         @NotNull(message = "Giá không được để trống")
         @Positive(message = "Giá phải lớn hơn 0")
         private BigDecimal price;
+
+        @Positive(message = "Giá khuyến mãi phải lớn hơn 0")
+        private BigDecimal salePrice;
+
+        private Instant saleEndTime;
 
         private Map<String, String> attributes;
 

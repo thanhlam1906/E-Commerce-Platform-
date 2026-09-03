@@ -24,6 +24,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -279,5 +280,60 @@ class ProductServiceTest {
 
         verify(cloudinaryService).deleteImage("img-old");
         verify(cloudinaryService, never()).deleteImage("img-new");
+    }
+
+    @Test
+    void updateProduct_existingSku_mergesSaleFields() {
+        ProductVariant vOld = ProductVariant.builder().sku("SKU1").name("v")
+                .price(new BigDecimal("1000000"))
+                .images(List.of("img-old")).build();
+        Product existing = Product.builder().id("1").isActive(true).variants(List.of(vOld)).build();
+        when(productRepository.findById("1")).thenReturn(Optional.of(existing));
+        when(productRepository.findByVariantsSkuIn(List.of("SKU1"))).thenReturn(List.of(existing));
+        when(productRepository.save(any(Product.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productMapper.toResponse(any(Product.class))).thenReturn(mock(ProductResponse.class));
+
+        Instant saleEnd = Instant.parse("2026-09-03T23:59:00Z");
+        CreateProductRequest.Variant reqV = reqVariant("SKU1");
+        reqV.setPrice(new BigDecimal("1000000"));
+        reqV.setSalePrice(new BigDecimal("800000"));
+        reqV.setSaleEndTime(saleEnd);
+        CreateProductRequest req = new CreateProductRequest();
+        req.setName("New");
+        req.setVariants(List.of(reqV));
+
+        productService.updateProduct("1", req, Map.of());
+
+        ArgumentCaptor<Product> captor = ArgumentCaptor.forClass(Product.class);
+        verify(productRepository).save(captor.capture());
+        ProductVariant saved = captor.getValue().getVariants().get(0);
+        assertEquals(0, saved.getSalePrice().compareTo(new BigDecimal("800000")));
+        assertEquals(saleEnd, saved.getSaleEndTime());
+    }
+
+    @Test
+    void updateProduct_existingSku_clearsSale_whenRequestOmitsIt() {
+        ProductVariant vOld = ProductVariant.builder().sku("SKU1").name("v")
+                .price(new BigDecimal("1000000"))
+                .salePrice(new BigDecimal("800000"))
+                .saleEndTime(Instant.parse("2026-09-03T23:59:00Z"))
+                .images(List.of("img-old")).build();
+        Product existing = Product.builder().id("1").isActive(true).variants(List.of(vOld)).build();
+        when(productRepository.findById("1")).thenReturn(Optional.of(existing));
+        when(productRepository.findByVariantsSkuIn(List.of("SKU1"))).thenReturn(List.of(existing));
+        when(productRepository.save(any(Product.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productMapper.toResponse(any(Product.class))).thenReturn(mock(ProductResponse.class));
+
+        CreateProductRequest req = new CreateProductRequest();
+        req.setName("New");
+        req.setVariants(List.of(reqVariant("SKU1"))); // không set sale → gỡ sale
+
+        productService.updateProduct("1", req, Map.of());
+
+        ArgumentCaptor<Product> captor = ArgumentCaptor.forClass(Product.class);
+        verify(productRepository).save(captor.capture());
+        ProductVariant saved = captor.getValue().getVariants().get(0);
+        assertEquals(null, saved.getSalePrice());
+        assertEquals(null, saved.getSaleEndTime());
     }
 }

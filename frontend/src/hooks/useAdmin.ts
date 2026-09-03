@@ -57,6 +57,8 @@ export interface VariantInput {
   sku: string
   name: string
   price: number
+  salePrice?: number
+  saleEndTime?: string
   attributes?: Record<string, string>
 }
 

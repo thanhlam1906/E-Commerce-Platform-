@@ -26,6 +26,13 @@ function suggestSku(productName: string, variantName: string) {
   return base.slice(0, 48).replace(/-+$/g, '')
 }
 
+/** ISO "…Z" → giá trị input datetime-local "YYYY-MM-DDTHH:mm" (giờ máy). */
+function toLocalInput(iso: string) {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export default function ProductForm() {
   const { id } = useParams()
   const isEdit = !!id
@@ -51,7 +58,16 @@ export default function ProductForm() {
       setBrand(existing.brand ?? '')
       setDescription(existing.description ?? '')
       setCategoryId(existing.categoryId ?? '')
-      setVariants(existing.variants.map((v) => ({ sku: v.sku, name: v.name, price: v.price, attributes: v.attributes })))
+      setVariants(
+        existing.variants.map((v) => ({
+          sku: v.sku,
+          name: v.name,
+          price: v.price,
+          salePrice: v.salePrice ?? undefined,
+          saleEndTime: v.saleEndTime ? toLocalInput(v.saleEndTime) : undefined,
+          attributes: v.attributes,
+        }))
+      )
     }
   }, [existing])
 
@@ -79,7 +95,17 @@ export default function ProductForm() {
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    const clean = variants.filter((v) => v.sku.trim() && v.price > 0)
+    // Sale hợp lệ cần đủ giá KM > 0 + thời hạn; thiếu 1 trong 2 → không sale (gửi undefined để xoá)
+    const clean = variants
+      .filter((v) => v.sku.trim() && v.price > 0)
+      .map((v) => {
+        const on = !!v.salePrice && v.salePrice > 0 && !!v.saleEndTime
+        return {
+          ...v,
+          salePrice: on ? v.salePrice : undefined,
+          saleEndTime: on ? new Date(v.saleEndTime as string).toISOString() : undefined,
+        }
+      })
     if (!name.trim() || clean.length === 0) {
       setError('Cần tên sản phẩm và ít nhất một biến thể hợp lệ')
       return
@@ -153,6 +179,22 @@ export default function ProductForm() {
                 placeholder="Giá *"
                 value={v.price || ''}
                 onChange={(e) => setVariant(i, { price: Number(e.target.value) })}
+              />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                className={inputCls}
+                type="number"
+                min={0}
+                placeholder="Giá khuyến mãi (để trống: không sale)"
+                value={v.salePrice ?? ''}
+                onChange={(e) => setVariant(i, { salePrice: e.target.value ? Number(e.target.value) : undefined })}
+              />
+              <input
+                className={inputCls}
+                type="datetime-local"
+                value={v.saleEndTime ?? ''}
+                onChange={(e) => setVariant(i, { saleEndTime: e.target.value || undefined })}
               />
             </div>
             <label className="block text-sm text-gray-500">

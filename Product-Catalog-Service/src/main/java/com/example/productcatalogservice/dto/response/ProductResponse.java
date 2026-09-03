@@ -28,6 +28,8 @@ public class ProductResponse {
         private String sku;
         private String name;
         private BigDecimal price;
+        private BigDecimal salePrice;
+        private Instant saleEndTime;
         private Map<String, String> attributes;
         private List<String> images;
     }

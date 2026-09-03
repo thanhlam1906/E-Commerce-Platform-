@@ -328,6 +328,32 @@ const PRODUCTS = [
     ]),
 ]
 
+// ── Flash sale ───────────────────────────────────────────────────────────
+// Một số sản phẩm (đủ nhóm) được giảm giá: salePrice tính theo % của price,
+// saleEndTime = T0 + until giờ. Áp cho mọi biến thể của sản phẩm để chuyển
+// phân loại không làm giá nhảy về gốc.
+const FLASH = {
+  'sp-iphone-15-pro-max': { off: 8, until: 18 },
+  'sp-galaxy-s24-ultra': { off: 10, until: 42 },
+  'sp-macbook-air-15-m4': { off: 6, until: 66 },
+  'sp-galaxy-tab-s8': { off: 12, until: 90 },
+  'sp-apple-watch-s8': { off: 10, until: 20 },
+  'sp-airpods-pro-2': { off: 15, until: 110 },
+  'sp-jbl-flip-6': { off: 15, until: 50 },
+  'sp-nike-air-force-1': { off: 20, until: 8 },
+  'sp-levis-501-jean': { off: 18, until: 130 },
+  'sp-tnf-arctic-parka': { off: 25, until: 30 },
+}
+const flashEnd = (until) => new Date(Date.parse(T0) + until * 3600_000).toISOString()
+for (const p of PRODUCTS) {
+  const s = FLASH[p._id]
+  if (!s) continue
+  for (const v of p.variants) {
+    v.salePrice = vnd(Math.round((Number(v.price) * (100 - s.off)) / 100))
+    v.saleEndTime = flashEnd(s.until)
+  }
+}
+
 // ── stock (tồn kho ban đầu cho từng SKU) ────────────────────────────────
 // một vài SKU để mức thấp (< ngưỡng 5) để demo cảnh báo tồn kho
 const STOCK = {
@@ -374,6 +400,7 @@ const prep = (list, keys) => list.map((doc) => {
 })
 const categories = prep(${JSON.stringify(categories)}, ['createdAt', 'updatedAt'])
 const products = prep(${JSON.stringify(PRODUCTS)}, ['createdAt', 'updatedAt'])
+  .map((p) => ({ ...p, variants: prep(p.variants, ['saleEndTime']) }))
 let upserted = 0
 for (const c of categories) if (db.categories.replaceOne({ _id: c._id }, c, { upsert: true }).upsertedCount) upserted++
 for (const p of products) if (db.products.replaceOne({ _id: p._id }, p, { upsert: true }).upsertedCount) upserted++

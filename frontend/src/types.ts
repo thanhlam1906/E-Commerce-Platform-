@@ -46,6 +46,8 @@ export interface ProductVariant {
   sku: string
   name: string
   price: number
+  salePrice?: number | null
+  saleEndTime?: string | null
   attributes: Record<string, string>
   images: string[]
 }

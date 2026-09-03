@@ -57,3 +57,6 @@ Product-Catalog-Service/.git/
 
 # Codegraph local index
 .codegraph/
+
+# Postman collection chua real VNPay creds — khong commit
+postman/voltstack-demo-flows.postman_collection.json

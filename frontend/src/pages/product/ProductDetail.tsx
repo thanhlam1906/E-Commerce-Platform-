@@ -5,8 +5,16 @@ import { useProduct } from '../../hooks/useProducts'
 import { useAddCartItem } from '../../hooks/useCart'
 import { useToast } from '../../components/ui/Toast'
 import { VariantPicker } from '../../components/product/VariantPicker'
-import { vnd } from '../../lib/format'
+import { effectivePrice, isOnSale, vnd } from '../../lib/format'
 import type { ProductVariant } from '../../types'
+
+function remaining(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = String(Math.floor(s / 3600)).padStart(2, '0')
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0')
+  const sec = String(s % 60).padStart(2, '0')
+  return `${h}:${m}:${sec}`
+}
 
 export default function ProductDetail() {
   const { id } = useParams()
@@ -16,6 +24,7 @@ export default function ProductDetail() {
   const [variant, setVariant] = useState<ProductVariant | null>(null)
   const [qty, setQty] = useState(1)
   const [img, setImg] = useState('')
+  const [now, setNow] = useState(() => Date.now())
 
   // khi navigate giữa 2 product cùng component → reset state
   useEffect(() => {
@@ -24,10 +33,19 @@ export default function ProductDetail() {
     setImg('')
   }, [id])
 
+  // tick 1s chỉ khi variant đang sale → khi hết hạn tự chuyển về giá gốc
+  useEffect(() => {
+    const active = variant ?? product?.variants?.[0]
+    if (!active || !isOnSale(active)) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [variant, product])
+
   if (isLoading) return <div className="py-20 text-center text-gray-500">Đang tải…</div>
   if (!product) return <div className="py-20 text-center text-gray-500">Không tìm thấy sản phẩm</div>
 
   const current = variant ?? product.variants[0]
+  const onSale = isOnSale(current)
   const images = current.images?.length ? current.images : product.variants[0].images ?? []
 
   async function addToCart() {
@@ -72,7 +90,19 @@ export default function ProductDetail() {
       <div>
         <h1 className="text-xl font-bold">{product.name}</h1>
         {product.brand && <p className="text-sm text-gray-500">{product.brand}</p>}
-        <div className="my-4 rounded-sm bg-brand-light p-3 text-2xl font-bold text-brand-dark">{vnd(current.price)}</div>
+        <div className="my-4 rounded-sm bg-brand-light p-3">
+          {onSale ? (
+            <div className="flex items-baseline gap-3">
+              <p className="text-2xl font-bold text-brand-dark">{vnd(effectivePrice(current))}</p>
+              <p className="text-base text-gray-400 line-through">{vnd(current.price)}</p>
+              <p className="ml-auto text-sm font-semibold text-brand-dark">
+                ⏱ {remaining(new Date(current.saleEndTime as string).getTime() - now)}
+              </p>
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-brand-dark">{vnd(current.price)}</p>
+          )}
+        </div>
         {product.variants.length > 1 && (
           <div className="mb-4">
             <p className="mb-2 text-sm text-gray-500">Phân loại</p>

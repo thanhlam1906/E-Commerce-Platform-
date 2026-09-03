@@ -172,6 +172,8 @@ public class ProductService {
             if (existing != null) {
                 entity.setName(reqVar.getName());
                 entity.setPrice(reqVar.getPrice());
+                entity.setSalePrice(reqVar.getSalePrice());
+                entity.setSaleEndTime(reqVar.getSaleEndTime());
                 entity.setAttributes(reqVar.getAttributes());
             }
 

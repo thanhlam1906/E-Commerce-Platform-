@@ -11,6 +11,7 @@ import io.grpc.stub.StreamObserver;
 import lombok.RequiredArgsConstructor;
 import net.devh.boot.grpc.server.service.GrpcService;
 
+import java.time.Instant;
 import java.util.Optional;
 
 @GrpcService
@@ -53,7 +54,7 @@ public class ProductVerifyGrpcService extends ProductVerifyServiceGrpc.ProductVe
                                 .setSku(variant.getSku())
                                 .setProductName(product.getName())
                                 .setVariantName(variant.getName())
-                                .setPrice(variant.getPrice().toPlainString())
+                                .setPrice(variant.effectivePrice(Instant.now()).toPlainString())
                                 .build()));
     }
 }
