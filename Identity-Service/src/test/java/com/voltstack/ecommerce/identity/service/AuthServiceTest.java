@@ -15,6 +15,7 @@ import com.voltstack.ecommerce.identity.exception.TokenReuseException;
 import com.voltstack.ecommerce.identity.model.RefreshToken;
 import com.voltstack.ecommerce.identity.model.User;
 import com.voltstack.ecommerce.identity.model.VerificationToken;
+import com.voltstack.ecommerce.identity.model.enums.AuthProvider;
 import com.voltstack.ecommerce.identity.model.enums.Role;
 import com.voltstack.ecommerce.identity.model.enums.VerificationPurpose;
 import com.voltstack.ecommerce.identity.repository.RefreshTokenRepository;
@@ -359,5 +360,73 @@ class AuthServiceTest {
                 authService.resetPassword(ResetPasswordRequest.builder().token("bad").newPassword("newPass123").build()));
         verify(userRepository, never()).save(any());
         verify(passwordEncoder, never()).encode(anyString());
+    }
+
+    @Test
+    void loginWithGoogle_newUser_createsGoogleUserAndReturnsTokens() throws Exception {
+        when(userRepository.findByEmail("user@gmail.com")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            if (u.getId() == null) {
+                u.setId(UUID.randomUUID());
+            }
+            return u;
+        });
+        when(passwordEncoder.encode(anyString())).thenReturn("random-hash");
+        when(jwtService.generateAccessToken(any(User.class))).thenReturn("access");
+        when(jwtService.generateRefreshToken()).thenReturn("raw-refresh");
+        when(jwtService.hashToken("raw-refresh")).thenReturn("hash-refresh");
+
+        AuthResponse res = authService.loginWithGoogle(
+                new GoogleUserInfo("sub-1", "User@GMAIL.com", "User Name", "http://pic"));
+
+        assertNotNull(res.getAccessToken());
+        assertEquals("raw-refresh", res.getRefreshToken());
+
+        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(userCaptor.capture());
+        User saved = userCaptor.getValue();
+        assertEquals("user@gmail.com", saved.getEmail());
+        assertEquals(AuthProvider.GOOGLE, saved.getAuthProvider());
+        assertEquals("sub-1", saved.getProviderId());
+        assertEquals("User Name", saved.getFullName());
+        assertEquals("http://pic", saved.getAvatarUrl());
+        assertNotNull(saved.getEmailVerifiedAt());
+        // password hash là giá trị ngẫu nhiên (không phải mật khẩu user nhập), không dùng để login được
+        assertEquals("random-hash", saved.getPasswordHash());
+    }
+
+    @Test
+    void loginWithGoogle_existingEmail_linksProviderAndVerifiesEmail() {
+        User u = user();
+        when(userRepository.findByEmail("a@b.com")).thenReturn(Optional.of(u));
+        when(jwtService.generateAccessToken(any(User.class))).thenReturn("access");
+        when(jwtService.generateRefreshToken()).thenReturn("raw-refresh");
+        when(jwtService.hashToken("raw-refresh")).thenReturn("hash-refresh");
+
+        authService.loginWithGoogle(new GoogleUserInfo("sub-9", "a@b.com", "A", null));
+
+        verify(userRepository).save(u);
+        assertEquals(AuthProvider.GOOGLE, u.getAuthProvider());
+        assertEquals("sub-9", u.getProviderId());
+        assertNotNull(u.getEmailVerifiedAt());
+    }
+
+    @Test
+    void loginWithGoogle_existingGoogleUser_noDuplicateSave() {
+        User u = user();
+        u.setAuthProvider(AuthProvider.GOOGLE);
+        u.setProviderId("sub-1");
+        u.setEmailVerifiedAt(Instant.now());
+        u.setFullName("A");
+        when(userRepository.findByEmail("a@b.com")).thenReturn(Optional.of(u));
+        when(jwtService.generateAccessToken(any(User.class))).thenReturn("access");
+        when(jwtService.generateRefreshToken()).thenReturn("raw-refresh");
+        when(jwtService.hashToken("raw-refresh")).thenReturn("hash-refresh");
+
+        authService.loginWithGoogle(new GoogleUserInfo("sub-1", "a@b.com", "A", null));
+
+        verify(userRepository, never()).save(any());
+        assertNotNull(u.getEmailVerifiedAt());
     }
 }

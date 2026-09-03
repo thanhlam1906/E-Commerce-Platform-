@@ -47,7 +47,9 @@ public class SecurityConfig {
                                 "/api/v1/auth/logout",
                                 "/api/v1/auth/verify-email",
                                 "/api/v1/auth/forgot-password",
-                                "/api/v1/auth/reset-password").permitAll()
+                                "/api/v1/auth/reset-password",
+                                "/api/v1/auth/google",
+                                "/api/v1/auth/google/callback").permitAll()
                         .requestMatchers("/.well-known/jwks.json", "/actuator/health", "/actuator/prometheus").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt

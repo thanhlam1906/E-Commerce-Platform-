@@ -18,6 +18,7 @@ import com.voltstack.ecommerce.identity.exception.TokenReuseException;
 import com.voltstack.ecommerce.identity.model.RefreshToken;
 import com.voltstack.ecommerce.identity.model.User;
 import com.voltstack.ecommerce.identity.model.VerificationToken;
+import com.voltstack.ecommerce.identity.model.enums.AuthProvider;
 import com.voltstack.ecommerce.identity.model.enums.Role;
 import com.voltstack.ecommerce.identity.model.enums.VerificationPurpose;
 import com.voltstack.ecommerce.identity.repository.RefreshTokenRepository;
@@ -99,6 +100,55 @@ public class AuthService {
         }
         if (!user.isActive()) {
             throw new InvalidCredentialsException(ErrorMessages.INVALID_CREDENTIALS);
+        }
+        return buildAuthResponse(user);
+    }
+
+    /**
+     * Google OAuth login (Cách A — backend code flow). User được xác thực bởi Google nên
+     * email coi như đã verify. Email trùng tài khoản password → auto-link, cho vào thẳng.
+     */
+    @Transactional
+    public AuthResponse loginWithGoogle(GoogleUserInfo info) {
+        String email = info.email().trim().toLowerCase();
+        User user = userRepository.findByEmail(email).orElse(null);
+        if (user == null) {
+            user = User.builder()
+                    .email(email)
+                    // Google user không có mật khẩu → hash ngẫu nhiên, không dùng được để login
+                    .passwordHash(passwordEncoder.encode(UUID.randomUUID().toString()))
+                    .fullName(info.fullName() == null || info.fullName().isBlank() ? email : info.fullName())
+                    .avatarUrl(info.picture())
+                    .role(Role.CUSTOMER)
+                    .isActive(true)
+                    .authProvider(AuthProvider.GOOGLE)
+                    .providerId(info.sub())
+                    .emailVerifiedAt(Instant.now())
+                    .build();
+            userRepository.save(user);
+        } else {
+            boolean changed = false;
+            if (!AuthProvider.GOOGLE.equals(user.getAuthProvider()) || !info.sub().equals(user.getProviderId())) {
+                user.setAuthProvider(AuthProvider.GOOGLE);
+                user.setProviderId(info.sub());
+                changed = true;
+            }
+            if (user.getEmailVerifiedAt() == null) {
+                user.setEmailVerifiedAt(Instant.now());
+                changed = true;
+            }
+            if ((user.getFullName() == null || user.getFullName().isBlank())
+                    && info.fullName() != null && !info.fullName().isBlank()) {
+                user.setFullName(info.fullName());
+                changed = true;
+            }
+            if (info.picture() != null && !info.picture().equals(user.getAvatarUrl())) {
+                user.setAvatarUrl(info.picture());
+                changed = true;
+            }
+            if (changed) {
+                userRepository.save(user);
+            }
         }
         return buildAuthResponse(user);
     }

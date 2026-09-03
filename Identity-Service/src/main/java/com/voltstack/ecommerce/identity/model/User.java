@@ -1,5 +1,6 @@
 package com.voltstack.ecommerce.identity.model;
 
+import com.voltstack.ecommerce.identity.model.enums.AuthProvider;
 import com.voltstack.ecommerce.identity.model.enums.Role;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -44,6 +45,14 @@ public class User {
 
     @Column(name = "avatar_url")
     private String avatarUrl;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "auth_provider", nullable = false)
+    @Builder.Default
+    private AuthProvider authProvider = AuthProvider.LOCAL;
+
+    @Column(name = "provider_id")
+    private String providerId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

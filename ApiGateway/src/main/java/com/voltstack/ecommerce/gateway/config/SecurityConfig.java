@@ -29,6 +29,8 @@ public class SecurityConfig {
         "POST /api/v1/auth/refresh",
         "POST /api/v1/auth/logout",
         "GET /api/v1/auth/verify-email",
+        "GET /api/v1/auth/google",
+        "GET /api/v1/auth/google/callback",
         "POST /api/v1/auth/forgot-password",
         "POST /api/v1/auth/reset-password",
         "POST /api/v1/payments/webhook/**",
