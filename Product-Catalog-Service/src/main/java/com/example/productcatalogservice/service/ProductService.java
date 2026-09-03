@@ -5,6 +5,7 @@ import com.example.productcatalogservice.dto.request.CreateProductRequest;
 import com.example.productcatalogservice.dto.response.ProductResponse;
 import com.example.productcatalogservice.exception.DuplicateResourceException;
 import com.example.productcatalogservice.exception.ResourceNotFoundException;
+import com.example.productcatalogservice.exception.SearchUnavailableException;
 import com.example.productcatalogservice.mapper.ProductMapper;
 import com.example.productcatalogservice.model.Category;
 import com.example.productcatalogservice.model.Product;
@@ -13,8 +14,10 @@ import com.example.productcatalogservice.model.enums.CategoryStatus;
 import com.example.productcatalogservice.repository.CategoryRepository;
 import com.example.productcatalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -33,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProductService {
@@ -42,6 +46,7 @@ public class ProductService {
     private final CloudinaryService cloudinaryService;
     private final ProductMapper productMapper;
     private final MongoTemplate mongoTemplate;
+    private final ProductSearchService searchService;
 
     // ---- Create (multipart) ----
 
@@ -60,23 +65,46 @@ public class ProductService {
             product.getVariants().get(variantIndex).setImages(urls);
         }
 
-        return productMapper.toResponse(saveProduct(product));
+        Product saved = saveProduct(product);
+        indexProductSearch(saved);
+        return productMapper.toResponse(saved);
     }
 
     // ---- Read ----
 
     public Page<ProductResponse> findAllProducts(String categoryId, String brand, String keyword, Pageable pageable) {
-        // Keyword (text search) thắng các filter khác — giữ hành vi cũ.
-        if (keyword != null && !keyword.isBlank()) {
-            return productRepository.searchByKeyword(keyword.trim(), pageable)
-                    .map(productMapper::toResponse);
-        }
-
+        keyword = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
         brand = (brand == null || brand.isBlank()) ? null : brand.trim();
         // categoryId là category cha → gom luôn sản phẩm của các category con (tree 2+ tầng).
         List<String> categoryIds = (categoryId == null || categoryId.isBlank())
                 ? null
                 : expandCategoryTree(categoryId);
+
+        // ES là primary: tìm id trên ES → hydrate + lọc isActive từ Mongo → sắp lại theo thứ tự ES.
+        try {
+            Page<String> idPage = searchService.search(keyword, categoryIds, brand, pageable);
+            Map<String, Product> activeById = productRepository.findAllById(idPage.getContent()).stream()
+                    .filter(Product::isActive)
+                    .collect(Collectors.toMap(Product::getId, p -> p));
+            List<ProductResponse> responses = idPage.getContent().stream()
+                    .filter(activeById::containsKey)
+                    .map(activeById::get)
+                    .map(productMapper::toResponse)
+                    .toList();
+            return new PageImpl<>(responses, pageable, idPage.getTotalElements());
+        } catch (SearchUnavailableException e) {
+            log.warn("ES unavailable, fallback to MongoDB search: {}", e.getMessage());
+            return mongoSearch(keyword, categoryIds, brand, pageable);
+        }
+    }
+
+    /** Fallback Mongo — logic cũ giữ nguyên (text index + lọc theo category/brand). */
+    private Page<ProductResponse> mongoSearch(String keyword, List<String> categoryIds, String brand, Pageable pageable) {
+        // Keyword (text search) thắng các filter khác — giữ hành vi cũ.
+        if (keyword != null) {
+            return productRepository.searchByKeyword(keyword, pageable)
+                    .map(productMapper::toResponse);
+        }
 
         Page<Product> page;
         if (categoryIds != null && brand != null) {
@@ -199,6 +227,7 @@ public class ProductService {
         product.setUpdatedAt(Instant.now());
 
         Product saved = saveProduct(product);
+        indexProductSearch(saved);
 
         // Xóa ảnh bị bỏ (best-effort) SAU khi save thành công — không throw ngược vào PUT
         Set<String> finalImages = saved.getVariants().stream()
@@ -220,6 +249,11 @@ public class ProductService {
         product.setActive(false);
         product.setUpdatedAt(Instant.now());
         productRepository.save(product);
+        try {
+            searchService.remove(product.getId());
+        } catch (Exception e) {
+            log.warn("ES remove product {} thất bại (bỏ qua): {}", product.getId(), e.toString());
+        }
     }
 
     // ---- Private helpers ----
@@ -230,6 +264,15 @@ public class ProductService {
         } catch (DuplicateKeyException e) {
             // Unique index trên slug hoặc variants.sku bị trùng
             throw new DuplicateResourceException(ErrorMessages.PRODUCT_SLUG_EXISTS);
+        }
+    }
+
+    /** Đồng bộ product lên ES sau create/update. Lỗi ES (kể cả schema) không được làm fail write. */
+    private void indexProductSearch(Product product) {
+        try {
+            searchService.index(product);
+        } catch (Exception e) {
+            log.warn("ES index product {} thất bại (bỏ qua): {}", product.getId(), e.toString());
         }
     }
 

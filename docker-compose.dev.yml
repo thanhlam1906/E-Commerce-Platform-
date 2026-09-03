@@ -115,6 +115,22 @@ services:
       retries: 10
     restart: unless-stopped
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5
+    container_name: elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["9200:9200"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9200 && echo -e \"GET /_cluster/health HTTP/1.0\\r\\n\\r\\n\" >&3 && cat <&3 | grep -qE \"green|yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   kafka:
     image: apache/kafka:3.8.0
     container_name: kafka
@@ -220,6 +236,7 @@ services:
       INSTANCE_HOSTNAME: product-catalog-service
       SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
       SPRING_DATA_MONGODB_URI: "mongodb://mongodb:27017/product-catalog"
+      SPRING_ELASTICSEARCH_URIS: "http://elasticsearch:9200"
       GRPC_SERVER_PORT: 9091
       CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
       CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
@@ -227,6 +244,8 @@ services:
     ports: ["8081:8081", "9091:9091"]
     depends_on:
       mongodb:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
       eureka-server:
         condition: service_healthy

@@ -4,6 +4,7 @@ import com.example.productcatalogservice.dto.request.CreateProductRequest;
 import com.example.productcatalogservice.dto.response.ProductResponse;
 import com.example.productcatalogservice.exception.DuplicateResourceException;
 import com.example.productcatalogservice.exception.ResourceNotFoundException;
+import com.example.productcatalogservice.exception.SearchUnavailableException;
 import com.example.productcatalogservice.mapper.ProductMapper;
 import com.example.productcatalogservice.model.Category;
 import com.example.productcatalogservice.model.Product;
@@ -31,10 +32,12 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -53,6 +56,8 @@ class ProductServiceTest {
     private ProductMapper productMapper;
     @Mock
     private MongoTemplate mongoTemplate;
+    @Mock
+    private ProductSearchService searchService;
     @InjectMocks
     private ProductService productService;
 
@@ -85,20 +90,43 @@ class ProductServiceTest {
     }
 
     @Test
-    void findAllProducts_keyword_usesSearch() {
+    void findAllProducts_keyword_esPrimary_hydratesAndKeepsEsOrder() {
         Pageable pageable = Pageable.unpaged();
+        Product p1 = Product.builder().id("p1").isActive(true).build();
+        Product p2 = Product.builder().id("p2").isActive(true).build();
+        Product p3 = Product.builder().id("p3").isActive(false).build(); // doc ES còn nhưng Mongo đã soft-delete
+        when(searchService.search("phone", null, null, pageable))
+                .thenReturn(new PageImpl<>(List.of("p1", "p2", "p3"), pageable, 3));
+        when(productRepository.findAllById(List.of("p1", "p2", "p3")))
+                .thenReturn(List.of(p2, p3, p1)); // Mongo trả thứ tự khác ES
+        when(productMapper.toResponse(p1)).thenReturn(ProductResponse.builder().id("p1").build());
+        when(productMapper.toResponse(p2)).thenReturn(ProductResponse.builder().id("p2").build());
+
+        Page<ProductResponse> result = productService.findAllProducts(null, null, " phone ", pageable);
+
+        verify(searchService).search("phone", null, null, pageable);
+        verify(productRepository, never()).searchByKeyword(any(), any());
+        // Thứ tự theo id của ES (p1, p2), không theo thứ tự findAllById; p3 inactive bị lọc
+        assertEquals(List.of("p1", "p2"), result.getContent().stream().map(ProductResponse::getId).toList());
+    }
+
+    @Test
+    void findAllProducts_keyword_esDown_fallsBackToMongoText() {
+        Pageable pageable = Pageable.unpaged();
+        when(searchService.search(any(), any(), any(), any())).thenThrow(new SearchUnavailableException("es down"));
         when(productRepository.searchByKeyword("phone", pageable)).thenReturn(Page.empty());
 
         productService.findAllProducts(null, null, " phone ", pageable);
 
+        verify(searchService).search("phone", null, null, pageable);
         verify(productRepository).searchByKeyword("phone", pageable);
-        verify(productRepository, never()).findByCategoryIdInAndIsActiveTrue(any(), any());
     }
 
     @Test
-    void findAllProducts_leafCategory_filtersExact() {
+    void findAllProducts_leafCategory_esDown_fallsBackToMongo() {
         Pageable pageable = Pageable.unpaged();
         stubActiveCategories(category("c1", null));
+        when(searchService.search(any(), any(), any(), any())).thenThrow(new SearchUnavailableException("es down"));
         when(productRepository.findByCategoryIdInAndIsActiveTrue(List.of("c1"), pageable)).thenReturn(Page.empty());
 
         productService.findAllProducts("c1", null, null, pageable);
@@ -107,31 +135,33 @@ class ProductServiceTest {
     }
 
     @Test
-    void findAllProducts_parentCategory_includesDescendants() {
+    void findAllProducts_parentCategory_expandsDescendants_es() {
         Pageable pageable = Pageable.unpaged();
         stubActiveCategories(category("c1", null), category("c1a", "c1"), category("c1b", "c1a"));
-        when(productRepository.findByCategoryIdInAndIsActiveTrue(List.of("c1", "c1a", "c1b"), pageable))
-                .thenReturn(Page.empty());
+        when(searchService.search(null, List.of("c1", "c1a", "c1b"), null, pageable)).thenReturn(Page.empty());
 
         productService.findAllProducts("c1", null, null, pageable);
 
-        verify(productRepository).findByCategoryIdInAndIsActiveTrue(List.of("c1", "c1a", "c1b"), pageable);
+        verify(searchService).search(null, List.of("c1", "c1a", "c1b"), null, pageable);
+        verify(productRepository, never()).findByCategoryIdInAndIsActiveTrue(any(), any());
     }
 
     @Test
-    void findAllProducts_brand_filtersBrand() {
+    void findAllProducts_brand_trimmed_es() {
         Pageable pageable = Pageable.unpaged();
-        when(productRepository.findByBrandAndIsActiveTrue("Nike", pageable)).thenReturn(Page.empty());
+        when(searchService.search(null, null, "Nike", pageable)).thenReturn(Page.empty());
 
         productService.findAllProducts(null, " Nike ", null, pageable);
 
-        verify(productRepository).findByBrandAndIsActiveTrue("Nike", pageable);
+        verify(searchService).search(null, null, "Nike", pageable);
+        verify(productRepository, never()).findByBrandAndIsActiveTrue(any(), any());
     }
 
     @Test
-    void findAllProducts_categoryAndBrand_combines() {
+    void findAllProducts_categoryAndBrand_esDown_fallsBackToMongo() {
         Pageable pageable = Pageable.unpaged();
         stubActiveCategories(category("c1", null));
+        when(searchService.search(any(), any(), any(), any())).thenThrow(new SearchUnavailableException("es down"));
         when(productRepository.findByCategoryIdInAndBrandAndIsActiveTrue(List.of("c1"), "Apple", pageable))
                 .thenReturn(Page.empty());
 
@@ -141,8 +171,9 @@ class ProductServiceTest {
     }
 
     @Test
-    void findAllProducts_noFilter_usesAllActive() {
+    void findAllProducts_noFilter_esDown_fallsBackToMongoBrowse() {
         Pageable pageable = Pageable.unpaged();
+        when(searchService.search(any(), any(), any(), any())).thenThrow(new SearchUnavailableException("es down"));
         when(productRepository.findAllByIsActiveTrue(pageable)).thenReturn(Page.empty());
 
         productService.findAllProducts(null, null, null, pageable);
@@ -200,6 +231,7 @@ class ProductServiceTest {
 
         assertFalse(p.isActive());
         verify(productRepository).save(p);
+        verify(searchService).remove("1");
     }
 
     // ---- createProduct ----
@@ -221,6 +253,26 @@ class ProductServiceTest {
         ArgumentCaptor<Product> captor = ArgumentCaptor.forClass(Product.class);
         verify(productRepository).save(captor.capture());
         assertEquals("ao-thun", captor.getValue().getSlug());
+        verify(searchService).index(any(Product.class));
+    }
+
+    @Test
+    void createProduct_indexThrows_stillSucceeds() {
+        CreateProductRequest req = new CreateProductRequest();
+        req.setName("Áo Thun");
+        req.setVariants(List.of(reqVariant("SKU1")));
+
+        Product entity = Product.builder().variants(List.of(pv("SKU1", List.of()))).build();
+        when(productMapper.toEntity(req)).thenReturn(entity);
+        when(productRepository.findByVariantsSkuIn(List.of("SKU1"))).thenReturn(List.of());
+        when(productRepository.save(any(Product.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productMapper.toResponse(any(Product.class))).thenReturn(mock(ProductResponse.class));
+        doThrow(new RuntimeException("es boom")).when(searchService).index(any(Product.class));
+
+        ProductResponse response = productService.createProduct(req, Map.of());
+
+        assertNotNull(response);
+        verify(searchService).index(any(Product.class));
     }
 
     @Test
@@ -234,6 +286,7 @@ class ProductServiceTest {
 
         assertThrows(DuplicateResourceException.class, () -> productService.createProduct(req, Map.of()));
         verify(productRepository, never()).save(any());
+        verify(searchService, never()).index(any());
     }
 
     // ---- updateProduct ----
@@ -280,6 +333,7 @@ class ProductServiceTest {
 
         verify(cloudinaryService).deleteImage("img-old");
         verify(cloudinaryService, never()).deleteImage("img-new");
+        verify(searchService).index(any(Product.class));
     }
 
     @Test
@@ -309,6 +363,7 @@ class ProductServiceTest {
         ProductVariant saved = captor.getValue().getVariants().get(0);
         assertEquals(0, saved.getSalePrice().compareTo(new BigDecimal("800000")));
         assertEquals(saleEnd, saved.getSaleEndTime());
+        verify(searchService).index(any(Product.class));
     }
 
     @Test
@@ -335,5 +390,6 @@ class ProductServiceTest {
         ProductVariant saved = captor.getValue().getVariants().get(0);
         assertEquals(null, saved.getSalePrice());
         assertEquals(null, saved.getSaleEndTime());
+        verify(searchService).index(any(Product.class));
     }
 }
