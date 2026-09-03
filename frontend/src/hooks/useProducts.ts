@@ -41,6 +41,18 @@ export function useProduct(id?: string) {
   })
 }
 
+/** Số đã bán thật per SKU (public, Order-Service). Record rỗng → chưa có đơn DELIVERED nào. */
+export function useSoldCounts(skus: string[]) {
+  const uniq = [...new Set(skus.filter((s) => s && s.trim()))]
+  const qs = uniq.map((s) => `skus=${encodeURIComponent(s)}`).join('&')
+  return useQuery({
+    queryKey: ['sold', uniq],
+    queryFn: () => api<Record<string, number>>(`/api/v1/orders/sold?${qs}`),
+    enabled: uniq.length > 0,
+    staleTime: 60_000,
+  })
+}
+
 export function useCategories(size = 30) {
   return useQuery({
     queryKey: ['categories', size],

@@ -23,6 +23,7 @@ public class SecurityConfig {
         "/actuator/health/**",
         "GET /api/v1/products/**",
         "GET /api/v1/categories/**",
+        "GET /api/v1/orders/sold",
         "/api/v1/cart/**",
         "POST /api/v1/auth/register",
         "POST /api/v1/auth/login",

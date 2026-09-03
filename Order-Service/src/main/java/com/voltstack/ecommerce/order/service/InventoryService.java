@@ -23,6 +23,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -111,6 +112,24 @@ public class InventoryService {
         transactionRepository.save(InventoryTransaction.builder()
                 .sku(sku).type(InventoryTxnType.DEDUCT).quantity(quantity).reference(reference).build());
         emitLowStockIfNeeded(sku);
+    }
+
+    /** Số đã bán thật per SKU = tổng DEDUCT (chỉ ghi khi admin chốt DELIVERED). SKU chưa bán → 0. */
+    @Transactional(readOnly = true)
+    public Map<String, Integer> getSoldCounts(List<String> skus) {
+        Map<String, Integer> sold = new HashMap<>();
+        if (skus == null || skus.isEmpty()) {
+            return sold;
+        }
+        List<String> unique = skus.stream().filter(s -> s != null && !s.isBlank()).distinct().toList();
+        if (unique.isEmpty()) {
+            return sold;
+        }
+        unique.forEach(s -> sold.put(s, 0));
+        for (Object[] row : transactionRepository.sumQuantityBySkuIn(InventoryTxnType.DEDUCT, unique)) {
+            sold.put((String) row[0], ((Number) row[1]).intValue());
+        }
+        return sold;
     }
 
     private StockResponse toStockResponse(Inventory inv) {

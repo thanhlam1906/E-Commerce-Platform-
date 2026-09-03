@@ -7,6 +7,7 @@ import com.voltstack.ecommerce.order.dto.response.CheckoutResponse;
 import com.voltstack.ecommerce.order.dto.response.OrderHistoryResponse;
 import com.voltstack.ecommerce.order.dto.response.OrderResponse;
 import com.voltstack.ecommerce.order.entity.OrderStatus;
+import com.voltstack.ecommerce.order.service.InventoryService;
 import com.voltstack.ecommerce.order.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -34,6 +36,7 @@ import java.util.UUID;
 public class OrderController {
 
     private final OrderService orderService;
+    private final InventoryService inventoryService;
 
     @PostMapping
     public ApiDataResponse<CheckoutResponse> createOrder(@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -45,6 +48,12 @@ public class OrderController {
     public ApiDataResponse<Page<OrderResponse>> listMyOrders(@RequestParam(required = false) String status,
                                                              @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return ApiDataResponse.ok(orderService.listMyOrders(parseStatus(status), pageable));
+    }
+
+    /** Số lượng đã bán theo SKU (public, không cần auth) — literal path thắng /{id}. */
+    @GetMapping("/sold")
+    public ApiDataResponse<Map<String, Integer>> getSoldCounts(@RequestParam("skus") List<String> skus) {
+        return ApiDataResponse.ok(inventoryService.getSoldCounts(skus));
     }
 
     @GetMapping("/{id}")

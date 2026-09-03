@@ -3,7 +3,7 @@ import { Package } from '@phosphor-icons/react'
 import { vnd } from '../../lib/format'
 import type { Product } from '../../types'
 
-export function ProductCard({ product }: { product: Product }) {
+export function ProductCard({ product, sold }: { product: Product; sold: number | null }) {
   const variant = product.variants[0]
   const image = variant?.images?.[0]
   const price = variant ? variant.price : 0
@@ -29,8 +29,8 @@ export function ProductCard({ product }: { product: Product }) {
       <div className="p-3">
         <p className="line-clamp-2 min-h-10 text-sm text-gray-800">{product.name}</p>
         <div className="mt-2 flex items-end justify-between">
-          <p className="text-base font-bold text-brand-dark">{vnd(price)}</p>
-          <span className="text-xs text-gray-400">{product.variants.length} phân loại</span>
+          <p className="text-sm font-bold text-brand-dark">{vnd(price)}</p>
+          {sold !== null && <span className="text-xs text-gray-400">Đã bán {sold}</span>}
         </div>
       </div>
     </Link>

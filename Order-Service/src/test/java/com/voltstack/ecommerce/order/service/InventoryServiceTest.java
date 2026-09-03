@@ -18,6 +18,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -133,6 +136,35 @@ class InventoryServiceTest {
 
         verify(inventoryRepository).deduct("SKU1", 2);
         verify(transactionRepository).save(argThatType(InventoryTxnType.DEDUCT));
+    }
+
+    // ---- getSoldCounts ----
+
+    @Test
+    void getSoldCounts_emptyOrNullSkus_returnsEmptyMapWithoutQuerying() {
+        assertEquals(Map.of(), inventoryService.getSoldCounts(List.of()));
+        assertEquals(Map.of(), inventoryService.getSoldCounts(null));
+        verify(transactionRepository, never()).sumQuantityBySkuIn(any(), any());
+    }
+
+    @Test
+    void getSoldCounts_blanksAndDuplicatesAreIgnored() {
+        when(transactionRepository.sumQuantityBySkuIn(any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{"SKU-A", 3L}));
+
+        Map<String, Integer> sold = inventoryService.getSoldCounts(Arrays.asList("", "  ", "SKU-A", "SKU-A", null));
+
+        assertEquals(Map.of("SKU-A", 3), sold);
+    }
+
+    @Test
+    void getSoldCounts_mapsAggregatedRowsAndDefaultsZeroForUnsoldSkus() {
+        when(transactionRepository.sumQuantityBySkuIn(any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{"SKU-A", 5L}, new Object[]{"SKU-B", 12L}));
+
+        Map<String, Integer> sold = inventoryService.getSoldCounts(List.of("SKU-A", "SKU-B", "SKU-C"));
+
+        assertEquals(Map.of("SKU-A", 5, "SKU-B", 12, "SKU-C", 0), sold);
     }
 
     // ---- checkAvailable ----
