@@ -29,10 +29,10 @@ public class CorsConfig {
     CorsWebFilter corsWebFilter() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(allowedOrigins);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of(
             "Authorization", "Content-Type",
-            "X-User-Id", "X-User-Roles", "Idempotency-Key"));
+            "X-User-Id", "X-User-Roles", "Idempotency-Key", "X-Session-Id"));
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
 
